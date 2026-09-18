@@ -7,14 +7,28 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaFileUpload
+try:
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+    from googleapiclient.http import MediaFileUpload
+    GOOGLE_IMPORT_ERROR = None
+except ImportError as exc:  # Dry runs do not require Google client libraries.
+    Request = Credentials = InstalledAppFlow = build = MediaFileUpload = None
+    GOOGLE_IMPORT_ERROR = exc
+
+    class HttpError(Exception):
+        pass
 
 from seo_generator import generate_metadata as generate_contextual_metadata
+from upload_policy import (
+    normalize_publishing_mode,
+    publishing_action,
+    unattended_upload_enabled,
+)
+from youtube_payload import build_caption_insert_body, build_video_insert_body
 import config as bot_config
 
 # ============================================================
@@ -48,34 +62,47 @@ NUMBER_OF_SHORTS = 5
 
 # Scheduled uploads are spaced this many hours apart.
 # PowerShell override: $env:YT_AUTO_BOT_INTERVAL_HOURS="12"
-SCHEDULE_INTERVAL_HOURS = float(os.environ.get("YT_AUTO_BOT_INTERVAL_HOURS", "12"))
+SCHEDULE_INTERVAL_HOURS = float(os.environ.get(
+    "YT_AUTO_BOT_INTERVAL_HOURS",
+    str(bot_config.setting("schedule_interval_hours", 12)),
+))
 SCHEDULE_INTERVAL_MINUTES = int(SCHEDULE_INTERVAL_HOURS * 60)
-START_DELAY_MINUTES = int(os.environ.get("YT_AUTO_BOT_START_DELAY_MINUTES", "10"))
-LATEST_UPLOAD_PUBLIC = True
+START_DELAY_MINUTES = int(os.environ.get(
+    "YT_AUTO_BOT_START_DELAY_MINUTES",
+    str(bot_config.setting("start_delay_minutes", 10)),
+))
 
 # "private" is strongly recommended for the first test.
 # Change to "public" only after you verify the generated metadata.
-PRIVACY_STATUS = "scheduled"
+PRIVACY_STATUS = normalize_publishing_mode(
+    bot_config.setting("privacy_status", "scheduled")
+)
 
 CATEGORY_ID = "22"  # People & Blogs
-DEFAULT_LANGUAGE = "en"
-DEFAULT_CHANNEL_KEYWORDS = [
-    "shorts",
-    "youtube shorts",
-]
+DEFAULT_CHANNEL_KEYWORDS = bot_config.string_list_setting(
+    "default_channel_keywords", ["shorts", "youtube shorts"]
+)
 
 # Add your own permanent channel keywords here.
-CHANNEL_KEYWORDS = [
-    # "your niche",
-    # "your channel topic",
-]
+CHANNEL_KEYWORDS = bot_config.string_list_setting("channel_keywords")
 
 # If True, a .srt subtitle track is uploaded in addition to the
 # burned-in captions already present in the rendered video.
 UPLOAD_YOUTUBE_CAPTIONS = True
 
 # Interactive by default. Set YT_AUTO_BOT_AUTO_UPLOAD=1 for unattended runs.
-AUTO_UPLOAD = os.environ.get("YT_AUTO_BOT_AUTO_UPLOAD", "1") == "1"
+_auto_upload_env = os.environ.get("YT_AUTO_BOT_AUTO_UPLOAD")
+AUTO_UPLOAD = unattended_upload_enabled(
+    _auto_upload_env,
+    default=bot_config.bool_setting("auto_upload_default", False),
+)
+DRY_RUN = (
+    "--dry-run" in {arg.lower() for arg in sys.argv[1:]}
+    or unattended_upload_enabled(os.environ.get("YT_AUTO_BOT_DRY_RUN"))
+)
+DRY_RUN_REPORT_DIR = OUTPUT_DIR / "dry-run-reports"
+DRY_RUN_REPORT_PATH = os.environ.get("YT_AUTO_BOT_DRY_RUN_REPORT", "").strip()
+APPROVED_REPORT_PATH = os.environ.get("YT_AUTO_BOT_APPROVED_REPORT", "").strip()
 
 # Prevent duplicate uploads by recording uploaded files.
 UPLOAD_LOG = Path(os.environ.get(
@@ -209,6 +236,11 @@ def save_json(path, data):
 # ============================================================
 
 def get_youtube_service():
+    if GOOGLE_IMPORT_ERROR is not None:
+        raise RuntimeError(
+            "YouTube client dependencies are not installed. "
+            "Run: python -m pip install -r requirements.txt"
+        ) from GOOGLE_IMPORT_ERROR
     if not CLIENT_SECRETS.exists():
         print()
         print("=" * 70)
@@ -752,27 +784,7 @@ def check_cache_isolation():
 
 def upload_video(youtube, video_path, metadata, publish_at=None):
     privacy = metadata["privacyStatus"]
-
-    status = {
-        "privacyStatus": privacy,
-        "selfDeclaredMadeForKids": False,
-    }
-
-    if publish_at:
-        if privacy != "private":
-            raise ValueError("A scheduled YouTube video must be private.")
-        status["publishAt"] = publish_at.isoformat().replace("+00:00", "Z")
-
-    body = {
-        "snippet": {
-            "title": metadata["title"],
-            "description": metadata["description"],
-            "tags": metadata["tags"],
-            "categoryId": metadata["categoryId"],
-            "defaultLanguage": metadata["defaultLanguage"],
-        },
-        "status": status,
-    }
+    body = build_video_insert_body(metadata, publish_at)
 
     print()
     print(f"Uploading: {video_path.name}")
@@ -830,14 +842,7 @@ def upload_caption(youtube, video_id, srt_path):
         resumable=False,
     )
 
-    body = {
-        "snippet": {
-            "videoId": video_id,
-            "language": DEFAULT_LANGUAGE,
-            "name": "English",
-            "isDraft": False,
-        }
-    }
+    body = build_caption_insert_body(video_id)
 
     try:
         youtube.captions().insert(
@@ -864,6 +869,53 @@ def load_upload_log():
 
 def save_upload_log(data):
     save_json(UPLOAD_LOG, data)
+
+
+def scheduled_videos_from_upload_log(upload_log):
+    """Convert local history into scheduler input without contacting YouTube."""
+    videos = []
+    for entry in upload_log.values():
+        if not isinstance(entry, dict):
+            continue
+        videos.append({
+            "id": entry.get("video_id"),
+            "status": {
+                "privacyStatus": entry.get("privacyStatus"),
+                "publishAt": entry.get("publishAt"),
+            },
+        })
+    return videos
+
+
+def save_dry_run_report(report):
+    if DRY_RUN_REPORT_PATH:
+        path = Path(DRY_RUN_REPORT_PATH).resolve()
+    else:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        path = DRY_RUN_REPORT_DIR / f"dry_run_{stamp}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_json(path, report)
+    return path
+
+
+def load_approved_items():
+    if not APPROVED_REPORT_PATH:
+        return {}
+    report = load_json(Path(APPROVED_REPORT_PATH), {})
+    if not isinstance(report, dict) or not report.get("approved"):
+        raise ValueError("The approved review report is missing or invalid.")
+    items = report.get("items") or []
+    approved = {}
+    for item in items:
+        if not isinstance(item, dict) or not item.get("video_path"):
+            continue
+        request = (item.get("planned_api_requests") or {}).get("videos.insert") or {}
+        body = request.get("body")
+        if isinstance(body, dict):
+            approved[str(Path(item["video_path"]).resolve())] = item
+    if not approved:
+        raise ValueError("The approved review report contains no uploadable items.")
+    return approved
 
 
 # ============================================================
@@ -923,7 +975,10 @@ def main():
     print("YOUTUBE SHORTS AUTOMATOR")
     print("=" * 70)
     print(f"Schedule interval: {SCHEDULE_INTERVAL_HOURS:g} hours")
-    print("Newest pending Short: PUBLIC immediately")
+    print(f"Publishing mode: {PRIVACY_STATUS}")
+    print(f"Upload confirmation: {'disabled' if AUTO_UPLOAD else 'required'}")
+    if DRY_RUN:
+        print("DRY RUN: YouTube OAuth and API calls are disabled.")
 
     check_cache_isolation()
 
@@ -938,17 +993,38 @@ def main():
         print("Latest selection file:")
         print(latest_selection_path)
 
-    youtube = get_youtube_service()
     upload_log = load_upload_log()
+    approved_items = load_approved_items()
+    report = {
+        "schema_version": 1,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "dry_run": DRY_RUN,
+        "youtube_oauth_used": False,
+        "youtube_api_calls_made": False,
+        "account": os.environ.get("YT_AUTO_BOT_ACCOUNT_NAME", "default"),
+        "publishing_mode": PRIVACY_STATUS,
+        "schedule_basis": (
+            "local upload log only; remote channel changes are not queried"
+            if DRY_RUN
+            else "current YouTube channel state"
+        ),
+        "items": [],
+        "skipped": [],
+    }
 
-    # YouTube is the source of truth. If a Short was manually deleted from
-    # YouTube Studio, remove only that stale local-log entry so the rendered
-    # file can be uploaded again on the next pass.
-    upload_log, deleted_log_entries = reconcile_upload_log(youtube, upload_log)
-    if deleted_log_entries:
-        print(
-            f"Reopened {len(deleted_log_entries)} deleted Short(s) for scheduling."
-        )
+    if DRY_RUN:
+        youtube = None
+        existing = scheduled_videos_from_upload_log(upload_log)
+    else:
+        youtube = get_youtube_service()
+        report["youtube_oauth_used"] = True
+        # YouTube is the source of truth. If a Short was manually deleted from
+        # Studio, reopen only that local duplicate-protection entry.
+        upload_log, deleted_log_entries = reconcile_upload_log(youtube, upload_log)
+        if deleted_log_entries:
+            print(
+                f"Reopened {len(deleted_log_entries)} deleted Short(s) for scheduling."
+            )
 
     # IMPORTANT: scan recursively. main.py creates:
     # output/<source_id>/<run_id>/short_XX.mp4
@@ -982,21 +1058,32 @@ def main():
     print()
     print(f"Rendered Shorts found (all folders): {len(output_files)}")
 
-    # Check the channel first so scheduling continues after already scheduled
-    # videos instead of creating overlapping/duplicate slots.
-    existing = get_channel_uploads(youtube)
-    reconcile_due_schedules(youtube, existing)
+    # Live runs use the channel as the scheduling source of truth. Dry runs
+    # retain the local-only estimate created above and make no API call.
+    if not DRY_RUN:
+        existing = get_channel_uploads(youtube)
+        if PRIVACY_STATUS == "scheduled":
+            reconcile_due_schedules(youtube, existing)
 
     pending = []
 
     for video_path in output_files:
         key = str(video_path.resolve())
 
+        if approved_items and key not in approved_items:
+            print(f"Skipping {video_path.name}: it is not in the approved review.")
+            continue
+
         if key in upload_log:
             print(
                 f"Skipping already-uploaded file: {video_path.name} "
                 f"-> {upload_log[key].get('video_id')}"
             )
+            report["skipped"].append({
+                "video_path": key,
+                "reason": "present in the local upload log",
+                "video_id": upload_log[key].get("video_id"),
+            })
             continue
 
         match = re.search(r"short_(\d+)$", video_path.stem, re.I)
@@ -1012,6 +1099,10 @@ def main():
                 f"was found for {video_path.parent}. Refusing to upload with "
                 "another Short's captions."
             )
+            report["skipped"].append({
+                "video_path": key,
+                "reason": "no exact clip/transcript binding",
+            })
             continue
 
         pending.append(
@@ -1020,24 +1111,38 @@ def main():
 
     if not pending:
         print("Nothing new to upload.")
+        if DRY_RUN:
+            report_path = save_dry_run_report(report)
+            print(f"Dry-run report: {report_path}")
         return
 
-    scheduled_count = max(0, len(pending) - (1 if LATEST_UPLOAD_PUBLIC else 0))
-    schedule_slots = next_schedule_slots(existing, scheduled_count)
+    scheduled_count = (
+        max(0, len(pending) - 1)
+        if PRIVACY_STATUS == "scheduled" and not approved_items
+        else 0
+    )
+    schedule_slots = next_schedule_slots(existing, scheduled_count) if scheduled_count else []
     schedule_index = 0
 
     for position, (video_path, index, clip, key, transcript, selection_path) in enumerate(pending):
-        # Preserve the requested behavior: the newest upload in this batch is
-        # public immediately; older pending uploads are scheduled.
-        is_latest = position == len(pending) - 1 and LATEST_UPLOAD_PUBLIC
-
-        if is_latest:
-            privacy = "public"
-            publish_at = None
+        approved_item = approved_items.get(key)
+        approved_body = None
+        if approved_item:
+            approved_body = approved_item["planned_api_requests"]["videos.insert"]["body"]
+            approved_status = approved_body.get("status") or {}
+            privacy = approved_status.get("privacyStatus")
+            publish_at = iso_to_dt(approved_status.get("publishAt"))
+            if privacy not in {"private", "public"}:
+                raise ValueError(f"Approved privacy is invalid for {video_path.name}.")
         else:
-            privacy = "private"
-            publish_at = schedule_slots[schedule_index]
-            schedule_index += 1
+            privacy, needs_schedule_slot = publishing_action(
+                PRIVACY_STATUS, position, len(pending)
+            )
+            if needs_schedule_slot:
+                publish_at = schedule_slots[schedule_index]
+                schedule_index += 1
+            else:
+                publish_at = None
 
         metadata = generate_metadata(
             clip=clip,
@@ -1048,6 +1153,18 @@ def main():
             default_channel_keywords=DEFAULT_CHANNEL_KEYWORDS,
             privacy_status=privacy,
         )
+        if approved_body:
+            approved_snippet = approved_body.get("snippet") or {}
+            metadata.update({
+                "title": approved_snippet.get("title", ""),
+                "description": approved_snippet.get("description", ""),
+                "tags": approved_snippet.get("tags") or [],
+                "categoryId": approved_snippet.get("categoryId", metadata["categoryId"]),
+                "defaultLanguage": approved_snippet.get(
+                    "defaultLanguage", metadata["defaultLanguage"]
+                ),
+                "privacyStatus": privacy,
+            })
 
         metadata_key = (
             selection_path.stem
@@ -1064,7 +1181,13 @@ def main():
         print("-" * 70)
         print(f"SHORT #{index}")
         print("-" * 70)
-        print(f"MODE: {'PUBLIC NOW' if is_latest else 'SCHEDULED -> PUBLIC'}")
+        if publish_at:
+            mode_label = "SCHEDULED -> PUBLIC"
+        elif privacy == "public":
+            mode_label = "PUBLIC NOW"
+        else:
+            mode_label = "PRIVATE"
+        print(f"MODE: {mode_label}")
 
         # Final validation mutates only metadata["tags"] and its derived count,
         # so the report below is exactly the payload that will be uploaded.
@@ -1111,11 +1234,38 @@ def main():
         # exact tag list that is about to enter the API request.
         save_json(metadata_path, metadata)
 
+        report_item = {
+            "order": position + 1,
+            "video_path": str(video_path.resolve()),
+            "clip_id": clip.get("clip_id") or f"{video_path.parent.name}_{index:02d}",
+            "metadata_path": str(metadata_path.resolve()),
+            "source": {
+                "title": (metadata.get("source_context") or {}).get("title"),
+                "type": (metadata.get("source_context") or {}).get("source_type"),
+                "confidence": (metadata.get("source_context") or {}).get("confidence"),
+            },
+            "planned_action": mode_label,
+            "planned_publish_at": (
+                publish_at.isoformat().replace("+00:00", "Z")
+                if publish_at
+                else None
+            ),
+            "validation": {"passed": ok, "problems": problems},
+        }
+
         if not ok:
             print()
             print("VALIDATION FAILED -- skipping this Short (not uploaded):")
             for problem in problems:
                 print(f"  - {problem}")
+            if DRY_RUN:
+                report["items"].append(report_item)
+            continue
+
+        if approved_body and build_video_insert_body(metadata, publish_at) != approved_body:
+            print()
+            print("APPROVAL MISMATCH: validated metadata differs from the reviewed payload.")
+            print("Refusing to upload. Prepare and approve this Short again.")
             continue
 
         print()
@@ -1125,9 +1275,56 @@ def main():
         print(f"  YouTube tag budget: {metadata['tag_character_count']} / 500,")
         print("  output file is under output/.")
 
+        if DRY_RUN:
+            clip_key = (
+                clip.get("clip_id")
+                or (selection_path.stem if selection_path else video_path.stem)
+            )
+            srt_path = None
+            caption_request = None
+            if UPLOAD_YOUTUBE_CAPTIONS and transcript:
+                srt_path = create_srt(clip, transcript, index, clip_key=clip_key)
+                caption_request = {
+                    "part": "snippet",
+                    "body": build_caption_insert_body("$VIDEO_ID_FROM_UPLOAD"),
+                    "media_body": {
+                        "path": str(srt_path.resolve()),
+                        "mimetype": "application/x-subrip",
+                        "resumable": False,
+                    },
+                }
+            report_item.update({
+                "caption_path": str(srt_path.resolve()) if srt_path else None,
+                "metadata": metadata,
+                "planned_api_requests": {
+                    "videos.insert": {
+                        "part": "snippet,status",
+                        "body": build_video_insert_body(metadata, publish_at),
+                        "media_body": {
+                            "path": str(video_path.resolve()),
+                            "mimetype": "video/mp4",
+                            "resumable": True,
+                        },
+                    },
+                    "captions.insert": caption_request,
+                },
+            })
+            report["items"].append(report_item)
+            print("\nDRY RUN: payload recorded; nothing was uploaded.")
+            continue
 
-        # Upload automatically. No Y/N prompt.
-        print("\nAUTO_UPLOAD is enabled; uploading without confirmation.")
+
+        if AUTO_UPLOAD:
+            print("\nUnattended upload is enabled; uploading without confirmation.")
+        else:
+            if not sys.stdin.isatty():
+                print("\nSKIPPING: upload confirmation requires an interactive terminal.")
+                print("Set YT_AUTO_BOT_AUTO_UPLOAD=1 only after reviewing the output.")
+                continue
+            answer = input(f"\nUpload {video_path.name} as {mode_label}? [y/N]: ").strip().lower()
+            if answer not in {"y", "yes"}:
+                print("Skipped by user.")
+                continue
 
         response = upload_video(
             youtube,
@@ -1155,9 +1352,9 @@ def main():
         print("Privacy:", actual.get("privacyStatus"))
         print("PublishAt:", actual.get("publishAt", "none"))
 
-        if is_latest and actual.get("privacyStatus") != "public":
+        if privacy == "public" and actual.get("privacyStatus") != "public":
             print()
-            print("WARNING: YouTube did not leave the newest upload PUBLIC.")
+            print("WARNING: YouTube did not leave the upload PUBLIC.")
             print("This can happen when the API project/account is restricted.")
             print("The bot cannot bypass a YouTube API restriction.")
 
@@ -1179,14 +1376,27 @@ def main():
         print("Done:")
         print(f"https://www.youtube.com/shorts/{video_id}")
 
+    if DRY_RUN:
+        report_path = save_dry_run_report(report)
+        print()
+        print("=" * 70)
+        print("DRY RUN COMPLETE — NOTHING WAS UPLOADED")
+        print("=" * 70)
+        print(f"Review report: {report_path}")
+        if PRIVACY_STATUS == "scheduled":
+            print("Schedule times are estimates based only on the local upload log.")
+        return
+
     print()
     print("=" * 70)
     print("UPLOAD / SCHEDULING COMPLETE")
     print("=" * 70)
-    print(f"Interval: {SCHEDULE_INTERVAL_HOURS:g} hours")
-    print("Newest pending upload: PUBLIC immediately")
-    print("Older pending uploads: scheduled PRIVATE -> PUBLIC")
-    print("Deleted YouTube slots: automatically reused on the next run")
+    print(f"Publishing mode: {PRIVACY_STATUS}")
+    if PRIVACY_STATUS == "scheduled":
+        print(f"Interval: {SCHEDULE_INTERVAL_HOURS:g} hours")
+        print("Newest pending upload: PUBLIC immediately")
+        print("Older pending uploads: scheduled PRIVATE -> PUBLIC")
+        print("Deleted YouTube slots: automatically reused on the next run")
 
 
 if __name__ == "__main__":

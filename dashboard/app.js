@@ -4,6 +4,10 @@ let currentSection = 'dashboard';
 let technicalJobId = null;
 let technicalTimer = null;
 let technicalRequestInFlight = false;
+let activeReviewJobId = null;
+let activeReviewReport = null;
+let activeReviewAccountId = null;
+let reviewPollTimer = null;
 
 const $ = id => document.getElementById(id);
 
@@ -124,7 +128,7 @@ function renderJobs() {
   const jobs = state.jobs || [];
   renderTechnicalJobOptions(jobs);
   $('jobs').innerHTML = jobs.map(j => {
-    const type = j.job_type === 'generate' ? 'Generate' : 'Upload';
+    const type = j.job_type === 'generate' ? 'Generate' : (j.job_type === 'prepare' ? 'Prepare review' : 'Upload');
     const detail = j.job_type === 'generate' ? (j.source_url || 'YouTube source') : `${(JSON.parseSafe(j.selected_files) || []).length} video(s)`;
     const action = (j.status === 'running' || j.status === 'queued') ? `<button type="button" class="danger small-stop" data-stop-job="${esc(j.id)}">Stop</button>` : '';
     return `<div class="row job-row" data-job-id="${esc(j.id)}">
@@ -146,8 +150,8 @@ function renderTechnicalJobOptions(jobs) {
   }
   select.innerHTML = ordered.length
     ? ordered.map(j => {
-        const type = j.job_type === 'generate' ? 'Generate' : 'Upload';
-        return `<option value="${esc(j.id)}">${esc(type)} · ${esc(j.status.toUpperCase())} · ${esc(j.id)}</option>`;
+        const type = j.job_type === 'generate' ? 'Generate' : (j.job_type === 'prepare' ? 'Prepare review' : 'Upload');
+        return `<option value="${esc(j.id)}">${esc(type)} / ${esc(j.status.toUpperCase())} / ${esc(j.id)}</option>`;
       }).join('')
     : '<option value="">No jobs yet</option>';
   if (technicalJobId && ordered.some(j => j.id === technicalJobId)) select.value = technicalJobId;
@@ -159,7 +163,7 @@ function jobStage(log, job) {
   const lower = text.toLowerCase();
   const lines = text.split(/\r?\n/).filter(Boolean);
   const last = lines.length ? lines[lines.length - 1].trim() : '';
-  let stage = job?.job_type === 'upload' ? 'Preparing upload' : 'Starting';
+  let stage = job?.job_type === 'upload' ? 'Preparing upload' : (job?.job_type === 'prepare' ? 'Preparing review' : 'Starting');
   if (/youtube download|trying youtube download|downloaded:|downloading/i.test(text)) stage = 'Downloading source';
   if (/loading whisper|whisper loaded/i.test(text)) stage = 'Loading Whisper';
   if (/transcribing|whisper progress/i.test(text)) stage = 'Transcribing audio';
@@ -207,9 +211,9 @@ async function updateTechnicalProgress() {
   const id = select.value || technicalJobId;
   if (!id) {
     $('techStage').textContent = 'Waiting';
-    $('techStatus').textContent = '—';
-    $('techElapsed').textContent = '—';
-    $('techProgressText').textContent = '—';
+    $('techStatus').textContent = '-';
+    $('techElapsed').textContent = '-';
+    $('techProgressText').textContent = '-';
     $('techProgressBar').style.width = '0%';
     $('techCurrent').textContent = 'No job selected.';
     $('techConsole').textContent = 'Select a job to view its live technical output.';
@@ -226,7 +230,7 @@ async function updateTechnicalProgress() {
     const meta = jobStage(log, job);
     const pct = technicalProgress(log, job);
     $('techStage').textContent = meta.stage;
-    $('techStatus').textContent = String(job.status || '—').toUpperCase();
+    $('techStatus').textContent = String(job.status || '-').toUpperCase();
     $('techElapsed').textContent = elapsedForJob(job);
     $('techProgressText').textContent = pct ? `${Math.round(pct)}%` : 'Waiting';
     $('techProgressBar').style.width = `${Math.max(0, Math.min(100, pct))}%`;
@@ -242,9 +246,9 @@ async function updateTechnicalProgress() {
 }
 
 function elapsedForJob(job) {
-  if (!job || !job.created_at) return '—';
+  if (!job || !job.created_at) return '-';
   const start = new Date(job.started_at || job.created_at).getTime();
-  if (!Number.isFinite(start)) return '—';
+  if (!Number.isFinite(start)) return '-';
   const end = job.finished_at ? new Date(job.finished_at).getTime() : Date.now();
   const seconds = Math.max(0, Math.floor((end - start) / 1000));
   const h = Math.floor(seconds / 3600);
@@ -289,7 +293,7 @@ function updateCount() {
   if ($('deleteBtn')) $('deleteBtn').disabled = selected.size === 0;
 }
 
-async function startUpload() {
+async function prepareUpload() {
   const platform = $('platform').value;
   const account = $('account').value;
   if (!selected.size) return toast('Select at least one Short.');
@@ -300,24 +304,132 @@ async function startUpload() {
     return v && uploadedFor(v, account);
   });
   if (already.length) {
-    const ok = window.confirm(`${already.length} selected Short(s) are already uploaded to ${accountName(account)}.\n\nUpload them again?`);
-    if (!ok) return;
+    return toast(`${already.length} selected Short(s) are already in this account's upload log. Select pending Shorts only.`);
   }
 
-  const ok = window.confirm(`Upload ${selected.size} Short(s) to ${accountName(account)}?\n\nThe existing uploader will handle metadata and scheduling.`);
-  if (!ok) return;
-
-  setBusy($('uploadBtn'), true, 'Starting...');
+  openReviewDialog();
+  showReviewState('Preparing metadata, captions, validation, and schedule. Nothing is being uploaded.');
+  setBusy($('uploadBtn'), true, 'Preparing...');
   try {
-    const data = await postJson('/api/upload', {platform, account_id: account, files: [...selected]});
-    if (!data.ok) throw new Error(data.error || 'Could not start upload.');
-    toast(`Upload job ${data.job_id} started.`);
-    selected.clear();
+    const data = await postJson('/api/prepare', {platform, account_id: account, files: [...selected]});
+    if (!data.ok) throw new Error(data.error || 'Could not prepare upload.');
+    activeReviewJobId = data.job_id;
+    activeReviewAccountId = account;
+    activeReviewReport = null;
+    pollReview();
     await loadState();
   } catch (e) {
-    toast(e.message);
+    showReviewState(e.message, true);
   } finally {
-    setBusy($('uploadBtn'), false, 'Upload selected');
+    setBusy($('uploadBtn'), false, 'Prepare upload');
+  }
+}
+
+function openReviewDialog() {
+  const dialog = $('reviewDialog');
+  $('reviewItems').innerHTML = '';
+  $('approveReviewBtn').disabled = true;
+  if (!dialog.open) dialog.showModal();
+}
+
+function closeReviewDialog() {
+  clearTimeout(reviewPollTimer);
+  reviewPollTimer = null;
+  $('reviewDialog').close();
+}
+
+function showReviewState(message, error = false) {
+  const el = $('reviewState');
+  el.textContent = message;
+  el.classList.add('show');
+  el.classList.toggle('error', error);
+}
+
+async function pollReview() {
+  clearTimeout(reviewPollTimer);
+  if (!activeReviewJobId) return;
+  try {
+    const r = await fetch('/api/review?id=' + encodeURIComponent(activeReviewJobId) + '&_=' + Date.now(), {cache: 'no-store'});
+    const data = await r.json();
+    if (r.status === 202) {
+      showReviewState('Preparing the review. Video files stay local and YouTube is not contacted.');
+      reviewPollTimer = setTimeout(pollReview, 1200);
+      return;
+    }
+    if (!r.ok) throw new Error(data.error || `Review failed (${r.status}).`);
+    activeReviewReport = data.report;
+    renderReview(data.report);
+    await loadState();
+  } catch (e) {
+    showReviewState(e.message, true);
+    $('approveReviewBtn').disabled = true;
+  }
+}
+
+function renderReview(report) {
+  const items = report.items || [];
+  const valid = items.filter(item => item.validation?.passed);
+  $('reviewSummary').textContent = `${valid.length} validated Short(s) prepared for ${accountName(activeReviewAccountId)}.`;
+  $('reviewState').classList.remove('show', 'error');
+  $('reviewItems').innerHTML = items.map((item, index) => {
+    const request = item.planned_api_requests?.['videos.insert'];
+    const body = request?.body || {};
+    const snippet = body.snippet || item.metadata || {};
+    const status = body.status || {};
+    const visibility = status.publishAt ? 'scheduled' : (status.privacyStatus || 'private');
+    const problems = item.validation?.problems || [];
+    return `<article class="review-item" data-review-index="${index}" data-video-path="${esc(item.video_path)}">
+      <div class="review-preview">
+        <video controls preload="metadata" src="/media?path=${encodeURIComponent(item.video_path)}"></video>
+        <div class="review-file" title="${esc(item.video_path)}">${esc(item.video_path.split(/[\\/]/).pop())}</div>
+        <div class="review-source">${esc(item.source?.title || 'Unknown source')} / confidence ${esc(item.source?.confidence ?? 'unknown')}</div>
+      </div>
+      <div class="review-form">
+        <label class="wide">Title<input data-field="title" maxlength="100" value="${esc(snippet.title || '')}" ${item.validation?.passed ? '' : 'disabled'}></label>
+        <label class="wide">Description<textarea data-field="description" maxlength="5000" ${item.validation?.passed ? '' : 'disabled'}>${esc(snippet.description || '')}</textarea></label>
+        <label class="wide">Tags, separated by commas<input data-field="tags" value="${esc((snippet.tags || []).join(', '))}" ${item.validation?.passed ? '' : 'disabled'}></label>
+        <label>Visibility<select data-field="visibility" ${item.validation?.passed ? '' : 'disabled'}>
+          ${status.publishAt ? `<option value="scheduled" ${visibility === 'scheduled' ? 'selected' : ''}>Scheduled: ${esc(formatDate(status.publishAt))}</option>` : ''}
+          <option value="private" ${visibility === 'private' ? 'selected' : ''}>Private</option>
+          <option value="public" ${visibility === 'public' ? 'selected' : ''}>Public now</option>
+        </select></label>
+        <div class="review-validation ${item.validation?.passed ? '' : 'invalid'}">${item.validation?.passed ? 'Validation passed' : esc(problems.join(' '))}</div>
+      </div>
+    </article>`;
+  }).join('') || '<div class="empty">No reviewable Shorts were produced.</div>';
+  $('approveReviewBtn').disabled = valid.length === 0;
+}
+
+async function approveReview() {
+  if (!activeReviewJobId || !activeReviewReport) return;
+  const account = activeReviewAccountId;
+  const items = [...document.querySelectorAll('.review-item')]
+    .filter(el => !el.querySelector('[data-field="title"]').disabled)
+    .map(el => ({
+      video_path: el.dataset.videoPath,
+      title: el.querySelector('[data-field="title"]').value.trim(),
+      description: el.querySelector('[data-field="description"]').value.trim(),
+      tags: el.querySelector('[data-field="tags"]').value.split(',').map(x => x.trim()).filter(Boolean),
+      visibility: el.querySelector('[data-field="visibility"]').value,
+    }));
+  if (!items.length) return showReviewState('No validated Shorts are available to approve.', true);
+  setBusy($('approveReviewBtn'), true, 'Starting upload...');
+  try {
+    const data = await postJson('/api/approve', {
+      account_id: account,
+      review_job_id: activeReviewJobId,
+      items,
+    });
+    if (!data.ok) throw new Error(data.error || 'Could not start approved upload.');
+    selected.clear();
+    closeReviewDialog();
+    toast(`Approved upload job ${data.job_id} started.`);
+    nav('activity');
+    await loadState();
+  } catch (e) {
+    showReviewState(e.message, true);
+  } finally {
+    setBusy($('approveReviewBtn'), false, 'Approve and upload');
   }
 }
 
@@ -397,7 +509,7 @@ function toast(message) {
 }
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
-function formatDate(s) { if (!s) return '—'; const d = new Date(s); return Number.isNaN(d.getTime()) ? s : d.toLocaleString(); }
+function formatDate(s) { if (!s) return '-'; const d = new Date(s); return Number.isNaN(d.getTime()) ? s : d.toLocaleString(); }
 function JSONSafe(v) { try { return JSON.parse(v); } catch { return null; } }
 JSON.parseSafe = JSONSafe;
 
@@ -410,7 +522,11 @@ function bindEvents() {
   $('selectPendingBtn').addEventListener('click', selectPending);
   $('selectAllBtn').addEventListener('click', selectAll);
   $('clearBtn').addEventListener('click', clearSelection);
-  $('uploadBtn').addEventListener('click', startUpload);
+  $('uploadBtn').addEventListener('click', prepareUpload);
+  $('approveReviewBtn').addEventListener('click', approveReview);
+  $('closeReviewBtn').addEventListener('click', closeReviewDialog);
+  $('cancelReviewBtn').addEventListener('click', closeReviewDialog);
+  $('reviewDialog').addEventListener('cancel', e => { e.preventDefault(); closeReviewDialog(); });
   $('deleteBtn').addEventListener('click', deleteSelectedShorts);
   $('jobs').addEventListener('click', e => { const btn = e.target.closest('[data-stop-job]'); if (btn) stopJob(btn.dataset.stopJob); });
   $('techJobSelect').addEventListener('change', () => { technicalJobId = $('techJobSelect').value; updateTechnicalProgress(); });

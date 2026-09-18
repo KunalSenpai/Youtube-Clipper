@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>YT Auto Bot</title>
-<link rel="stylesheet" href="/style.css?v=3">
+<link rel="stylesheet" href="/style.css?v=4">
 </head>
 <body>
 <div class="shell">
@@ -59,7 +59,7 @@
         </div>
         <div id="videoGrid" class="video-grid"></div>
         <div class="action-row">
-          <button type="button" class="primary" id="uploadBtn">Upload selected</button>
+          <button type="button" class="primary" id="uploadBtn">Prepare upload</button>
           <span id="uploadHint" class="hint"></span>
         </div>
       </div>
@@ -95,9 +95,9 @@
           </div>
           <div class="tech-summary">
             <div><span>Stage</span><strong id="techStage">Waiting</strong></div>
-            <div><span>Status</span><strong id="techStatus">—</strong></div>
-            <div><span>Elapsed</span><strong id="techElapsed">—</strong></div>
-            <div><span>Progress</span><strong id="techProgressText">—</strong></div>
+            <div><span>Status</span><strong id="techStatus">-</strong></div>
+            <div><span>Elapsed</span><strong id="techElapsed">-</strong></div>
+            <div><span>Progress</span><strong id="techProgressText">-</strong></div>
           </div>
           <div class="tech-progress"><div id="techProgressBar"></div></div>
           <div class="tech-current" id="techCurrent">No active job selected.</div>
@@ -116,7 +116,27 @@
     </section>
   </main>
 </div>
-<div id="toast" class="toast"></div>
-<script src="/app.js?v=3"></script>
+<dialog id="reviewDialog" class="review-dialog" aria-labelledby="reviewTitle">
+  <div class="review-shell">
+    <div class="review-header">
+      <div>
+        <h2 id="reviewTitle">Review upload</h2>
+        <p id="reviewSummary">Preparing metadata and captions.</p>
+      </div>
+      <button type="button" class="icon-button" id="closeReviewBtn" aria-label="Close review">Close</button>
+    </div>
+    <div id="reviewState" class="review-state" role="status" aria-live="polite"></div>
+    <div id="reviewItems" class="review-items"></div>
+    <div class="review-footer">
+      <p>Uploading uses this approved snapshot. If validation changes it, the upload is refused.</p>
+      <div class="review-actions">
+        <button type="button" class="text-btn" id="cancelReviewBtn">Cancel</button>
+        <button type="button" class="primary" id="approveReviewBtn" disabled>Approve and upload</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="/app.js?v=4"></script>
 </body>
 </html>

@@ -37,7 +37,10 @@ FFMPEG = bot_config.FFMPEG
 bot_config.setup_logging("main")
 
 # Whisper
-MODEL_SIZE = os.environ.get("YT_AUTO_BOT_WHISPER_MODEL", "small")
+MODEL_SIZE = os.environ.get(
+    "YT_AUTO_BOT_WHISPER_MODEL",
+    str(bot_config.setting("whisper_model", "small")),
+)
 WHISPER_PROGRESS_SECONDS = float(os.environ.get("YT_AUTO_BOT_WHISPER_PROGRESS_SECONDS", "30"))
 
 # Shorts

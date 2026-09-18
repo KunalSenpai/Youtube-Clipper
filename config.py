@@ -65,15 +65,14 @@ SETTINGS_PATH = CONFIG_DIR / "settings.json"
 
 _DEFAULT_SETTINGS = {
     # Only used if YT_AUTO_BOT_FFMPEG is not set and ffmpeg is not on PATH.
-    "ffmpeg_path": r"E:\ffmpeg\bin\ffmpeg.exe",
+    "ffmpeg_path": "",
     "whisper_model": "small",
     "schedule_interval_hours": 12,
     "start_delay_minutes": 10,
     "privacy_status": "scheduled",
-    # Matches the bot's existing behavior (unattended upload unless
-    # YT_AUTO_BOT_AUTO_UPLOAD=0 is set). See README note in this repo about
-    # this default before relying on it.
-    "auto_upload_default": True,
+    # Safe default: command-line uploads require confirmation. The dashboard
+    # opts into unattended mode explicitly after the user clicks Upload.
+    "auto_upload_default": False,
     "channel_keywords": [],
     "default_channel_keywords": ["shorts", "youtube shorts"],
 }
@@ -102,6 +101,33 @@ def _load_settings() -> dict:
 
 
 SETTINGS = _load_settings()
+
+
+def setting(name: str, default=None):
+    """Return a setting while keeping callers independent of JSON loading."""
+    return SETTINGS.get(name, default)
+
+
+def string_list_setting(name: str, default=None) -> list[str]:
+    """Return a normalized list of non-empty strings from a JSON setting."""
+    value = SETTINGS.get(name, default or [])
+    if not isinstance(value, list):
+        return list(default or [])
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def bool_setting(name: str, default: bool = False) -> bool:
+    """Return a boolean setting without treating the string "false" as true."""
+    value = SETTINGS.get(name, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(default)
 
 # ============================================================
 # FFMPEG

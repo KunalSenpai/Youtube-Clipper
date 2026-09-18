@@ -26,6 +26,7 @@ ROOT = bot_config.PROJECT_ROOT
 OUTPUT = bot_config.OUTPUT_DIR
 CACHE = bot_config.CACHE_DIR
 LOGS = bot_config.LOGS_DIR
+REPORTS = OUTPUT / "dry-run-reports"
 DASHBOARD_DIR = ROOT / "dashboard"
 ACCOUNTS_FILE = ROOT / "config" / "accounts.json"
 DB_FILE = CACHE / "dashboard.db"
@@ -35,6 +36,7 @@ PORT = int(os.environ.get("YT_AUTO_BOT_DASHBOARD_PORT", "8765"))
 DASHBOARD_DIR.mkdir(parents=True, exist_ok=True)
 CACHE.mkdir(parents=True, exist_ok=True)
 LOGS.mkdir(parents=True, exist_ok=True)
+REPORTS.mkdir(parents=True, exist_ok=True)
 
 INDEX = DASHBOARD_DIR / "index.html"
 STYLE = DASHBOARD_DIR / "style.css"
@@ -68,7 +70,8 @@ def db():
             log_file TEXT,
             error TEXT,
             job_type TEXT NOT NULL DEFAULT 'upload',
-            source_url TEXT
+            source_url TEXT,
+            report_file TEXT
         )
     """)
     # Backward-compatible migration for the first dashboard version.
@@ -77,6 +80,8 @@ def db():
         conn.execute("ALTER TABLE jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'upload'")
     if "source_url" not in columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN source_url TEXT")
+    if "report_file" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN report_file TEXT")
     conn.commit()
     return conn
 
@@ -195,6 +200,7 @@ def run_process_job(job_id, command, env, log_path):
             process = subprocess.Popen(
                 command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                start_new_session=(os.name != "nt"),
             )
             with PROCESS_LOCK:
                 ACTIVE_PROCESSES[job_id] = process
@@ -245,14 +251,20 @@ def start_generation(account, source_url):
     return job_id
 
 
-def start_upload(platform, account, selected):
+def start_upload(platform, account, selected, dry_run=False, approved_report=None):
     job_id = uuid.uuid4().hex[:12]
+    report_path = REPORTS / f"dashboard_review_{job_id}.json" if dry_run else None
+    job_type = "prepare" if dry_run else "upload"
     with db() as conn:
         conn.execute(
             """INSERT INTO jobs
-               (id,created_at,account_id,platform,selected_files,status,job_type)
-               VALUES (?,?,?,?,?,?,?)""",
-            (job_id, utc_now(), account["id"], platform, json.dumps(selected), "queued", "upload"),
+               (id,created_at,account_id,platform,selected_files,status,job_type,report_file)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                job_id, utc_now(), account["id"], platform,
+                json.dumps(selected), "queued", job_type,
+                str(report_path.resolve()) if report_path else None,
+            ),
         )
 
     if platform != "youtube":
@@ -271,7 +283,14 @@ def start_upload(platform, account, selected):
     env["YT_AUTO_BOT_UPLOAD_LOG"] = str(account_log_path(account).resolve())
     env["YT_AUTO_BOT_ACCOUNT_NAME"] = account.get("name", account["id"])
     env["YT_AUTO_BOT_SELECTED_FILES"] = os.pathsep.join(selected)
-    env["YT_AUTO_BOT_AUTO_UPLOAD"] = "1"
+    if dry_run:
+        env["YT_AUTO_BOT_DRY_RUN"] = "1"
+        env["YT_AUTO_BOT_DRY_RUN_REPORT"] = str(report_path.resolve())
+        env["YT_AUTO_BOT_AUTO_UPLOAD"] = "0"
+    else:
+        env["YT_AUTO_BOT_AUTO_UPLOAD"] = "1"
+    if approved_report:
+        env["YT_AUTO_BOT_APPROVED_REPORT"] = str(Path(approved_report).resolve())
     env["YT_AUTO_BOT_PAUSE"] = "0"
     env["PYTHONUNBUFFERED"] = "1"
 
@@ -414,6 +433,124 @@ def safe_output_file(raw_path):
     return None
 
 
+def safe_report_file(raw_path):
+    try:
+        path = Path(raw_path).resolve()
+        path.relative_to(REPORTS.resolve())
+        if path.is_file() and path.suffix.lower() == ".json":
+            return path
+    except Exception:
+        pass
+    return None
+
+
+def review_job(job_id):
+    row = next((x for x in job_rows() if x["id"] == job_id), None)
+    if not row or row.get("job_type") != "prepare":
+        return None, "Review job not found."
+    if row.get("status") != "success":
+        return row, None
+    path = safe_report_file(row.get("report_file"))
+    if not path:
+        return row, "Review report is missing."
+    report = JSONSafe(path.read_text(encoding="utf-8"))
+    if not isinstance(report, dict):
+        return row, "Review report is invalid."
+    row["report"] = report
+    return row, None
+
+
+def approve_review(account, review_job_id, edits):
+    row, error = review_job(review_job_id)
+    if error:
+        raise ValueError(error)
+    if not row or row.get("status") != "success":
+        raise ValueError("The review is not ready yet.")
+    if row.get("account_id") != account.get("id"):
+        raise ValueError("The review belongs to a different account.")
+
+    report = row["report"]
+    items = report.get("items") or []
+    edit_map = {
+        str(Path(item.get("video_path", "")).resolve()): item
+        for item in (edits or [])
+        if isinstance(item, dict) and item.get("video_path")
+    }
+    approved_items = []
+    for item in items:
+        if not isinstance(item, dict) or not item.get("validation", {}).get("passed"):
+            continue
+        video_path = str(Path(item.get("video_path", "")).resolve())
+        if not safe_output_file(video_path):
+            raise ValueError("A reviewed Short is no longer available.")
+        edit = edit_map.get(video_path, {})
+        request = (item.get("planned_api_requests") or {}).get("videos.insert") or {}
+        body = request.get("body") or {}
+        snippet = body.get("snippet") or {}
+        status = body.get("status") or {}
+
+        title = str(edit.get("title", snippet.get("title", ""))).strip()
+        description = str(edit.get("description", snippet.get("description", ""))).strip()
+        raw_tags = edit.get("tags", snippet.get("tags", []))
+        if not isinstance(raw_tags, list):
+            raise ValueError(f"Tags must be a list for {Path(video_path).name}.")
+        tags = [str(tag).strip() for tag in raw_tags if str(tag).strip()]
+        visibility = str(edit.get("visibility", "scheduled" if status.get("publishAt") else status.get("privacyStatus", "private"))).lower()
+        if not title or len(title) > 100:
+            raise ValueError(f"Title must be 1-100 characters for {Path(video_path).name}.")
+        if not description or len(description) > 5000:
+            raise ValueError(f"Description must be 1-5000 characters for {Path(video_path).name}.")
+        if not tags:
+            raise ValueError(f"At least one tag is required for {Path(video_path).name}.")
+        if visibility not in {"scheduled", "private", "public"}:
+            raise ValueError("Visibility must be scheduled, private, or public.")
+        if visibility == "scheduled" and not status.get("publishAt"):
+            raise ValueError("This review has no scheduled time to preserve.")
+
+        snippet.update({"title": title, "description": description, "tags": tags})
+        if visibility == "scheduled":
+            status["privacyStatus"] = "private"
+        else:
+            status = {
+                "privacyStatus": visibility,
+                "selfDeclaredMadeForKids": False,
+            }
+        body["snippet"] = snippet
+        body["status"] = status
+        request["body"] = body
+        item["planned_api_requests"]["videos.insert"] = request
+        item["planned_action"] = (
+            "SCHEDULED -> PUBLIC" if visibility == "scheduled"
+            else ("PUBLIC NOW" if visibility == "public" else "PRIVATE")
+        )
+        item["planned_publish_at"] = status.get("publishAt")
+        if isinstance(item.get("metadata"), dict):
+            item["metadata"].update({
+                "title": title,
+                "description": description,
+                "tags": tags,
+                "privacyStatus": status["privacyStatus"],
+            })
+        approved_items.append(item)
+
+    if not approved_items:
+        raise ValueError("No validated Shorts are available to approve.")
+    approved_path = REPORTS / f"approved_{uuid.uuid4().hex[:12]}.json"
+    approved_report = dict(report)
+    approved_report.update({
+        "approved": True,
+        "approved_at": utc_now(),
+        "source_review_job_id": review_job_id,
+        "items": approved_items,
+    })
+    approved_path.write_text(
+        json.dumps(approved_report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    selected = [item["video_path"] for item in approved_items]
+    return start_upload("youtube", account, selected, approved_report=approved_path)
+
+
 def valid_youtube_url(url):
     return bool(re.match(r"^https?://(www\.)?(youtube\.com|youtu\.be)/", url, re.I))
 
@@ -461,6 +598,23 @@ class Handler(BaseHTTPRequestHandler):
             json_response(self, {"job": row, "log": log})
             return
 
+        if parsed.path == "/api/review":
+            job_id = parse_qs(parsed.query).get("id", [""])[0]
+            row, error = review_job(job_id)
+            if not row:
+                return json_response(self, {"error": error}, 404)
+            if error:
+                return json_response(self, {"error": error, "job": row}, 409)
+            if row.get("status") in {"queued", "running"}:
+                return json_response(self, {"ready": False, "job": row}, 202)
+            if row.get("status") != "success":
+                return json_response(
+                    self,
+                    {"error": row.get("error") or "Review preparation failed.", "job": row},
+                    409,
+                )
+            return json_response(self, {"ready": True, "job": row, "report": row["report"]})
+
         if parsed.path == "/media":
             raw = parse_qs(parsed.query).get("path", [""])[0]
             path = safe_output_file(raw)
@@ -505,7 +659,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path not in {"/api/upload", "/api/generate", "/api/stop", "/api/delete"}:
+        if parsed.path not in {
+            "/api/upload", "/api/prepare", "/api/approve",
+            "/api/generate", "/api/stop", "/api/delete",
+        }:
             self.send_error(404)
             return
 
@@ -522,6 +679,16 @@ class Handler(BaseHTTPRequestHandler):
             account = account_by_id(body.get("account_id"))
             if not account:
                 return json_response(self, {"error": "Unknown account"}, 400)
+
+            if parsed.path == "/api/approve":
+                if account.get("platform") != "youtube":
+                    return json_response(self, {"error": "Only YouTube reviews can be approved."}, 400)
+                job_id = approve_review(
+                    account,
+                    str(body.get("review_job_id", "")),
+                    body.get("items", []),
+                )
+                return json_response(self, {"ok": True, "job_id": job_id})
 
             if parsed.path == "/api/generate":
                 if account.get("platform") != "youtube":
@@ -544,10 +711,19 @@ class Handler(BaseHTTPRequestHandler):
             selected = [x for x in selected if x in valid_set]
             if not selected:
                 return json_response(self, {"error": "Selected files are no longer valid output Shorts."}, 400)
-            job_id = start_upload(platform, account, selected)
+            job_id = start_upload(
+                platform,
+                account,
+                selected,
+                dry_run=parsed.path == "/api/prepare",
+            )
             return json_response(self, {"ok": True, "job_id": job_id})
         except Exception as exc:
             return json_response(self, {"error": str(exc)}, 400)
+
+
+class LocalDashboardServer(ThreadingHTTPServer):
+    allow_reuse_address = False
 
 
 def main():
@@ -556,7 +732,7 @@ def main():
         if not p.exists():
             raise SystemExit(f"Missing dashboard asset: {p}")
     db().close()
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server = LocalDashboardServer((HOST, PORT), Handler)
     print("=" * 64)
     print("YT AUTO BOT DASHBOARD")
     print("=" * 64)

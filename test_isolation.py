@@ -6,8 +6,11 @@ Regression test for:
 Run: python3 test_isolation.py
 """
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from seo_generator import generate_metadata
+from upload_policy import publishing_action, unattended_upload_enabled
+from youtube_payload import build_video_insert_body
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -160,6 +163,36 @@ for fake_source_name in ["Series Gamma", "Series Delta", "Series Epsilon"]:
     check(f'"{fake_source_name}" scenario does NOT resolve to "hour"', title.strip().lower() != "hour")
     check(f'"{fake_source_name}" scenario does NOT resolve to a bare duration phrase',
           not DURATION_PHRASE_RE.match(title.strip()))
+
+
+# ------------------------------------------------------------------
+# TEST 5: upload safety and publishing modes
+# ------------------------------------------------------------------
+print("\n=== TEST 5: Upload policy safety ===")
+
+check("Unattended upload is disabled by default", not unattended_upload_enabled(None))
+check("Explicit unattended upload opt-in works", unattended_upload_enabled("1"))
+check("Explicit false overrides a true configured default", not unattended_upload_enabled("0", True))
+check("Private mode keeps every upload private", publishing_action("private", 0, 2) == ("private", False))
+check("Public mode publishes every upload", publishing_action("public", 0, 2) == ("public", False))
+check("Scheduled mode schedules older uploads", publishing_action("scheduled", 0, 2) == ("private", True))
+check("Scheduled mode publishes only the newest upload now", publishing_action("scheduled", 1, 2) == ("public", False))
+
+scheduled_metadata = {
+    "title": "Example",
+    "description": "Example description",
+    "tags": ["example"],
+    "categoryId": "22",
+    "defaultLanguage": "en",
+    "privacyStatus": "private",
+}
+scheduled_time = datetime(2030, 1, 2, 3, 4, tzinfo=timezone.utc)
+scheduled_body = build_video_insert_body(scheduled_metadata, scheduled_time)
+check("API payload preserves private scheduling", scheduled_body["status"] == {
+    "privacyStatus": "private",
+    "selfDeclaredMadeForKids": False,
+    "publishAt": "2030-01-02T03:04:00Z",
+})
 
 
 print()

@@ -316,6 +316,15 @@ def build_context_tags(context: dict, channel_keywords: list[str] | None = None)
             if episode:
                 add(f"{series} season {season} episode {episode}", 98)
 
+        # The detector only writes characters after source-level evidence has
+        # met its reliability threshold. These are context entities, not words
+        # mined from the clip transcript, so they remain isolated per source.
+        for character in context.get("characters", [])[:6]:
+            character = normalize(character)
+            if character:
+                add(character, 96)
+                add(f"{character} {series}", 94)
+
     # Explicitly configured channel keywords are allowed, but only after the
     # source-context tags and never from the transcript.
     for keyword in channel_keywords or []:
@@ -363,7 +372,12 @@ def generate_metadata(
 
     series = extract_series_name(context.get("title", "")) if source_confident(context) else ""
     title = build_title(transcript_text, context)
-    tags = build_context_tags(context, channel_keywords)
+    configured_keywords = (
+        channel_keywords
+        if channel_keywords
+        else (default_channel_keywords or [])
+    )
+    tags = build_context_tags(context, configured_keywords)
 
     # If a high-confidence source exists, the series itself is always the first
     # tag. If source confidence is low, don't fabricate a series tag.

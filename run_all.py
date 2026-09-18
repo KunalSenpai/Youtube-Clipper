@@ -23,28 +23,37 @@ def main() -> int:
     env = os.environ.copy()
     env.setdefault("YT_AUTO_BOT_PAUSE", "0")
 
-    mode = "".join(sys.argv[1:2]).lower()
-    if mode in {"local", "--local"}:
+    args = sys.argv[1:]
+    dry_run = any(arg.lower() == "--dry-run" for arg in args)
+    args = [arg for arg in args if arg.lower() != "--dry-run"]
+    if len(args) != 1:
+        mode = ""
+    else:
+        mode = args[0]
+    normalized_mode = mode.lower()
+    if normalized_mode in {"local", "--local"}:
         env["YT_AUTO_BOT_SOURCE_MODE"] = "local"
         env["YT_AUTO_BOT_AUTO_LOCAL"] = "1"
-    elif mode.startswith("http://") or mode.startswith("https://"):
+    elif normalized_mode.startswith("http://") or normalized_mode.startswith("https://"):
         env["YT_AUTO_BOT_SOURCE_MODE"] = "youtube"
         env["YT_AUTO_BOT_YOUTUBE_URL"] = mode
-    elif mode in {"youtube", "--youtube"}:
+    elif normalized_mode in {"youtube", "--youtube"}:
         url = input("YouTube URL: ").strip()
         env["YT_AUTO_BOT_SOURCE_MODE"] = "youtube"
         env["YT_AUTO_BOT_YOUTUBE_URL"] = url
     else:
         print("Usage:")
-        print("  python run_all.py local")
-        print("  python run_all.py <YouTube URL>")
-        print("  python run_all.py youtube")
+        print("  python run_all.py local [--dry-run]")
+        print("  python run_all.py <YouTube URL> [--dry-run]")
+        print("  python run_all.py youtube [--dry-run]")
         print("\nThe last form prompts for a URL.")
         return 2
 
-    # Keep uploads interactive unless the user explicitly opts into unattended mode.
-    if os.environ.get("YT_AUTO_BOT_AUTO_UPLOAD") == "1":
-        env["YT_AUTO_BOT_AUTO_UPLOAD"] = "1"
+    if dry_run:
+        env["YT_AUTO_BOT_DRY_RUN"] = "1"
+
+    # youtube_automator.py is interactive by default. os.environ.copy() above
+    # preserves an explicit override for either unattended or confirmed mode.
 
     code = run("main.py", env)
     if code != 0:

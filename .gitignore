@@ -1,13 +1,19 @@
 # Python
 venv/
+.venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Generated videos and caches
 cache/
 output/
 logs/
 music/
+input/
+temp/
 
 # FFmpeg binaries
 ffmpeg/
@@ -22,9 +28,18 @@ client_secret*.json
 youtube_token.json
 *.cookies
 .env
+.env.*
+!.env.example
+
+# Optional machine-local overrides
+config/settings.local.json
 
 # OS / IDE
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local tooling
+.ruff_cache/
+.mypy_cache/
