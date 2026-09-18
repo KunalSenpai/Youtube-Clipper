@@ -239,7 +239,8 @@ systemd, storage, and private-network setup.
 
 Never commit OAuth client secrets, access tokens, refresh tokens, cookies, or
 generated private media. See [SECURITY.md](SECURITY.md) for reporting guidance
-and deployment precautions.
+and deployment precautions. Data handling is described in
+[PRIVACY.md](PRIVACY.md).
 
 ## Contributing
 
