@@ -1,0 +1,30 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Generated videos and caches
+cache/
+output/
+logs/
+music/
+
+# FFmpeg binaries
+ffmpeg/
+
+# Installers
+*.exe
+
+# OAuth / credentials / secrets
+*token*.json
+*credentials*.json
+client_secret*.json
+youtube_token.json
+*.cookies
+.env
+
+# OS / IDE
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,17 @@
+{
+  "accounts": [
+    {
+      "id": "youtube_main",
+      "name": "YouTube Main",
+      "platform": "youtube",
+      "token_file": "youtube_token.json",
+      "upload_log": "cache/youtube_upload_log_youtube_main.json"
+    },
+    {
+      "id": "instagram_main",
+      "name": "Instagram Main",
+      "platform": "instagram",
+      "status": "not_configured"
+    }
+  ]
+}
