@@ -200,18 +200,27 @@ channel.
 
 ```text
 Youtube-Clipper/
-|-- dashboard/             Browser interface
-|-- config/                Account and application settings
-|-- dashboard.py           Local dashboard server and job controller
-|-- main.py                Download, transcription, selection, and rendering
-|-- youtube_automator.py   Validation, scheduling, captions, and publishing
-|-- seo_generator.py       Context-aware metadata generation
-|-- source_detector.py     Source identification and evidence scoring
-|-- upload_policy.py       Upload confirmation and visibility policy
-|-- youtube_payload.py     YouTube request construction
-|-- run_all.py             Command-line workflow launcher
-`-- test_isolation.py      Regression and upload-policy checks
+|-- youtube_clipper/       Application package
+|   |-- backend/           Dashboard server and background jobs
+|   |-- metadata/          Source detection and SEO generation
+|   |-- publishing/        Upload policy, payloads, and YouTube client
+|   |-- video/             Framing and video-editing helpers
+|   |-- cli.py             Command-line workflow orchestration
+|   |-- config.py          Paths, settings, and logging
+|   `-- pipeline.py        Download, transcription, selection, and rendering
+|-- dashboard/             Browser interface assets
+|-- config/                User-editable account and application settings
+|-- tests/                 Regression checks
+|-- docs/                  Operations and architecture documentation
+|-- dashboard.py           Stable dashboard entry point
+|-- main.py                Stable generation entry point
+|-- run_all.py             Stable workflow entry point
+`-- youtube_automator.py   Stable publishing entry point
 ```
+
+The small root entry files preserve existing commands and the Proxmox systemd
+configuration. Application implementations live in `youtube_clipper/`; see
+[Architecture](docs/ARCHITECTURE.md) for ownership and dependency boundaries.
 
 Runtime directories such as `input/`, `output/`, `cache/`, and `logs/` are
 created locally and are not committed.
@@ -221,7 +230,7 @@ created locally and are not committed.
 Run the regression checks:
 
 ```bash
-python test_isolation.py
+python -m tests.test_isolation
 ```
 
 Validate all Python files:

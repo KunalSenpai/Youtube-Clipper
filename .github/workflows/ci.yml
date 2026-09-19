@@ -29,7 +29,7 @@ jobs:
         run: python -m compileall -q .
 
       - name: Run regression checks
-        run: python test_isolation.py
+        run: python -m tests.test_isolation
 
       - name: Validate dashboard JavaScript
         run: node --check dashboard/app.js

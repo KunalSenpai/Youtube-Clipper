@@ -9,7 +9,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-import config as bot_config
+from youtube_clipper import config as bot_config
 
 
 OUTPUT = bot_config.OUTPUT_DIR.resolve()

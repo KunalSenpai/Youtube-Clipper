@@ -15,9 +15,13 @@ installing the media dependencies:
 
 ```bash
 python -m compileall -q .
-python test_isolation.py
+python -m tests.test_isolation
 node --check dashboard/app.js
 ```
+
+Keep new application code inside the appropriate `youtube_clipper/` package.
+Root Python files are stable compatibility entry points, not implementation
+modules. See `docs/ARCHITECTURE.md` before introducing a new top-level module.
 
 ## Pull requests
 

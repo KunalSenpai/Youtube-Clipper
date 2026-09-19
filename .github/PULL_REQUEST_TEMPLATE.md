@@ -5,7 +5,7 @@ Describe the problem and the change.
 ## Verification
 
 - [ ] `python -m compileall -q .`
-- [ ] `python test_isolation.py`
+- [ ] `python -m tests.test_isolation`
 - [ ] `node --check dashboard/app.js`
 - [ ] Tested with a dry run or private upload when publishing behavior changed
 
