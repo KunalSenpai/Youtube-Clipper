@@ -227,6 +227,56 @@ except ValueError:
 check("Invalid framing values are rejected", rejected_invalid_framing)
 
 
+# ------------------------------------------------------------------
+# TEST 7: tag quality and diversity
+# ------------------------------------------------------------------
+print("\n=== TEST 7: Tag quality and diversity ===")
+from youtube_clipper.metadata.seo import tags_are_near_duplicates
+from youtube_clipper.publishing.youtube import validate_and_normalize_tags as validate_upload_tags
+
+Path("cache/source_context_clickbait.json").write_text("""
+{
+  "source_type": "webseries",
+  "title": "INSANE Details You Probably Missed In The TV Show",
+  "confidence": 0.93,
+  "characters": ["Jordan Lee"],
+  "keywords": ["insane", "details", "mystery", "detective", "evidence"]
+}
+""", encoding="utf-8")
+clickbait_clip = {
+    "start": 0,
+    "end": 20,
+    "text": "Jordan finally finds the evidence hidden in the room.",
+    "source_context_file": "cache/source_context_clickbait.json",
+}
+clickbait_meta = generate_metadata(
+    clickbait_clip,
+    1,
+    [{"text": clickbait_clip["text"], "words": []}],
+    Path("."),
+    privacy_status="private",
+)
+quality_tags = clickbait_meta["tags"]
+check("Clickbait source title is not used as a tag", not any("probably missed" in tag.casefold() for tag in quality_tags))
+check("Noise words are excluded from standalone tags", not any(tag.casefold() in {"insane", "details", "missed", "probably"} for tag in quality_tags))
+check("Evidence-backed character remains available", "Jordan Lee" in quality_tags)
+check("Discovery tag remains available", "YouTube Shorts" in quality_tags)
+check("Tag list stays compact", len(quality_tags) <= 15)
+check(
+    "No near-duplicate tag variants remain",
+    not any(
+        tags_are_near_duplicates(left, right)
+        for index, left in enumerate(quality_tags)
+        for right in quality_tags[index + 1:]
+    ),
+)
+upload_tags = validate_upload_tags(
+    ["Series Alpha", "Series Alpha clips", "Series Alpha scenes", "YouTube Shorts", "TV clips"],
+    allowed_phrases=["Series Alpha", "YouTube Shorts"],
+)
+check("Final upload guard removes repetitive variants", upload_tags == ["Series Alpha", "YouTube Shorts", "TV clips"])
+
+
 print()
 print("=" * 60)
 if FAILED:

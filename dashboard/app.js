@@ -10,6 +10,8 @@ let activeReviewReport = null;
 let activeReviewAccountId = null;
 let reviewPollTimer = null;
 let activeFramePath = null;
+let activePreviewPath = null;
+let lastSyncAt = null;
 let framePosition = {centerX: 0.5, centerY: 0.5, zoom: 1};
 let framePreviewAnimation = null;
 
@@ -20,11 +22,26 @@ async function loadState() {
     const r = await fetch('/api/state?_=' + Date.now(), {cache: 'no-store'});
     if (!r.ok) throw new Error('State request failed: ' + r.status);
     state = await r.json();
+    lastSyncAt = new Date();
+    updateSyncState(true);
     render();
   } catch (e) {
     console.error(e);
+    updateSyncState(false);
     toast('Could not load dashboard state. Check the dashboard server.');
   }
+}
+
+function updateSyncState(online) {
+  const container = $('syncState');
+  if (!container) return;
+  const connected = online !== false && navigator.onLine;
+  container.classList.toggle('offline', !connected);
+  $('syncLabel').textContent = connected ? 'Live' : 'Offline';
+  $('syncTime').textContent = connected && lastSyncAt
+    ? `· ${lastSyncAt.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'})}`
+    : '· retrying';
+  container.title = connected && lastSyncAt ? `Last updated ${lastSyncAt.toLocaleString()}` : 'Dashboard connection unavailable';
 }
 
 function youtubeAccounts() {
@@ -61,6 +78,11 @@ function render() {
   renderJobs();
   renderAccountsPage();
   updateCount();
+  document.body.classList.add('ready');
+}
+
+function emptyState(index, title, message) {
+  return `<div class="empty"><span>${esc(index)}</span><b>${esc(title)}</b><p>${esc(message)}</p></div>`;
 }
 
 function setOptions(select, accounts, placeholder) {
@@ -109,40 +131,76 @@ function renderVideos() {
         <div class="video-title-row"><label class="check-wrap"><input type="checkbox" class="video-check" data-path="${esc(v.path)}" ${checked ? 'checked' : ''}><span></span></label><b title="${esc(v.name)}">${esc(v.name)}</b></div>
         <small>${esc(v.folder)} · ${v.size_mb} MB</small>
         <div class="badge-row"><span class="badge ${uploaded ? 'done' : ''}">${uploaded ? 'Uploaded' : 'Pending'}</span>${v.legacy ? '<span class="badge legacy">Legacy</span>' : ''}</div>
-        <div class="video-card-actions"><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust frame' : 'Regenerate to edit'}</button>${v.framing_mode === 'manual' ? '<span class="badge done">Manual frame</span>' : ''}</div>
+        <div class="video-card-actions"><button type="button" class="frame-button" data-preview-path="${esc(v.path)}">Preview</button><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust frame' : 'Regenerate to edit'}</button>${v.framing_mode === 'manual' ? '<span class="badge done">Manual frame</span>' : ''}</div>
       </div>
     </article>`;
-  }).join('') || '<div class="empty">No rendered Shorts for this account yet. Generate some from the Generate Shorts page.</div>';
+  }).join('') || emptyState('01', 'No Shorts in this queue', 'Generate a source video to create your first reviewable clips.');
+}
+
+function filteredLibraryVideos() {
+  const filter = $('videoAccountFilter').value || '__all__';
+  const search = $('videoSearch').value.trim().toLowerCase();
+  const status = $('videoStatusFilter').value;
+  const sort = $('videoSort').value;
+  const videos = videosForAccount(filter).filter(v => {
+    const uploaded = (v.uploaded_accounts || []).length > 0;
+    if (status === 'uploaded' && !uploaded) return false;
+    if (status === 'pending' && uploaded) return false;
+    if (!search) return true;
+    const owner = v.content_account_id ? accountName(v.content_account_id) : 'unassigned legacy';
+    return [v.name, v.folder, owner, v.path].some(value => String(value || '').toLowerCase().includes(search));
+  });
+  return videos.sort((a, b) => {
+    if (sort === 'oldest') return String(a.modified || '').localeCompare(String(b.modified || ''));
+    if (sort === 'largest') return Number(b.size_mb || 0) - Number(a.size_mb || 0);
+    if (sort === 'name') return String(a.name || '').localeCompare(String(b.name || ''), undefined, {sensitivity: 'base'});
+    return String(b.modified || '').localeCompare(String(a.modified || ''));
+  });
 }
 
 function renderTable() {
-  const filter = $('videoAccountFilter').value || '__all__';
-  const videos = videosForAccount(filter);
+  const videos = filteredLibraryVideos();
+  $('videoResultCount').textContent = `${videos.length} Short${videos.length === 1 ? '' : 's'}`;
   $('videoTable').innerHTML = videos.map(v => {
     const owner = v.content_account_id ? accountName(v.content_account_id) : 'Unassigned / legacy';
+    const uploaded = (v.uploaded_accounts || []).length > 0;
     return `<div class="row video-row">
       <div><b>${esc(v.name)}</b><span>${esc(v.folder)}</span></div>
       <div>${esc(owner)}</div>
-      <div>${esc(v.modified)}</div>
+      <div><span class="badge ${uploaded ? 'done' : ''}">${uploaded ? 'Uploaded' : 'Pending'}</span><span>${esc(v.modified)}</span></div>
       <div>${v.size_mb} MB</div>
+      <div class="row-actions"><button type="button" class="frame-button" data-preview-path="${esc(v.path)}">Preview</button><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust' : 'No master'}</button></div>
     </div>`;
-  }).join('') || '<div class="empty">No Shorts found.</div>';
+  }).join('') || emptyState('03', 'No matching Shorts', 'Try another search, account, or upload status filter.');
 }
 
 function renderJobs() {
   const jobs = state.jobs || [];
   renderTechnicalJobOptions(jobs);
-  $('jobs').innerHTML = jobs.map(j => {
-    const type = j.job_type === 'generate' ? 'Generate' : (j.job_type === 'prepare' ? 'Prepare review' : 'Upload');
-    const detail = j.job_type === 'generate' ? (j.source_url || 'YouTube source') : `${(JSON.parseSafe(j.selected_files) || []).length} video(s)`;
-    const action = (j.status === 'running' || j.status === 'queued') ? `<button type="button" class="danger small-stop" data-stop-job="${esc(j.id)}">Stop</button>` : '';
-    return `<div class="row job-row" data-job-id="${esc(j.id)}">
-      <div><b>${esc(type)}</b><span>${esc(accountName(j.account_id))} · ${esc(j.platform)}</span></div>
-      <div class="status ${esc(j.status)}">${esc(j.status.toUpperCase())}</div>
+  const jobMarkup = job => {
+    const type = job.job_type === 'generate' ? 'Generate' : (job.job_type === 'prepare' ? 'Prepare review' : 'Upload');
+    const detail = job.job_type === 'generate' ? (job.source_url || 'YouTube source') : `${(JSON.parseSafe(job.selected_files) || []).length} video(s)`;
+    const action = (job.status === 'running' || job.status === 'queued') ? `<button type="button" class="danger small-stop" data-stop-job="${esc(job.id)}">Stop</button>` : '';
+    return `<article class="row job-row" data-job-id="${esc(job.id)}" tabindex="0" role="button" aria-label="Inspect ${esc(type)} job ${esc(job.id)}">
+      <div><b>${esc(type)}</b><span>${esc(accountName(job.account_id))} · ${esc(job.platform)}</span></div>
+      <div class="status ${esc(job.status)}">${esc(job.status.toUpperCase())}</div>
       <div title="${esc(detail)}">${esc(detail)}</div>
-      <div>${esc(formatDate(j.created_at))} ${action}</div>
-    </div>`;
-  }).join('') || '<div class="empty">No jobs yet.</div>';
+      <div>${esc(formatDate(job.created_at))} ${action}</div>
+    </article>`;
+  };
+  const typeFilter = $('jobTypeFilter').value;
+  const statusFilter = $('jobStatusFilter').value;
+  const search = $('jobSearch').value.trim().toLowerCase();
+  const filtered = jobs.filter(job => {
+    if (typeFilter !== 'all' && job.job_type !== typeFilter) return false;
+    if (statusFilter !== 'all' && job.status !== statusFilter) return false;
+    if (!search) return true;
+    return [job.id, job.source_url, job.platform, accountName(job.account_id)].some(value => String(value || '').toLowerCase().includes(search));
+  });
+  $('jobResultCount').textContent = `${filtered.length} job${filtered.length === 1 ? '' : 's'}`;
+  $('jobs').innerHTML = filtered.map(jobMarkup).join('') || emptyState('04', 'No matching activity', 'Try another job type, status, or search term.');
+  const generations = jobs.filter(j => j.job_type === 'generate').slice(0, 6);
+  $('generationJobs').innerHTML = generations.map(jobMarkup).join('') || emptyState('02', 'No generation history', 'Start a job above and its progress will appear here.');
 }
 
 function renderTechnicalJobOptions(jobs) {
@@ -272,8 +330,9 @@ function elapsedForJob(job) {
 function renderAccountsPage() {
   $('accounts').innerHTML = state.accounts.map(a => {
     const configured = a.status !== 'not_configured' && (a.platform !== 'youtube' || !!a.token_file);
-    return `<div class="account"><div><b>${esc(a.name)}</b><span>${esc(a.platform)}</span></div><strong class="account-status ${configured ? 'connected' : ''}">${configured ? 'Connected' : 'Not configured'}</strong></div>`;
-  }).join('') || '<div class="empty">No accounts configured.</div>';
+    const initial = String(a.platform || '?').slice(0, 1).toUpperCase();
+    return `<article class="account"><span class="account-mark">${esc(initial)}</span><div><b>${esc(a.name)}</b><span>${esc(a.platform)} destination</span></div><strong class="account-status ${configured ? 'connected' : ''}"><i></i>${configured ? 'Connected' : 'Not configured'}</strong></article>`;
+  }).join('') || emptyState('05', 'No accounts configured', 'Add an account definition on the server to enable publishing.');
 }
 
 function togglePath(path) {
@@ -334,6 +393,63 @@ async function prepareUpload() {
   } finally {
     setBusy($('uploadBtn'), false, 'Prepare upload');
   }
+}
+
+function openPreview(path) {
+  const video = state.videos.find(item => item.path === path);
+  if (!video) return toast('That Short is no longer available.');
+  activePreviewPath = path;
+  const uploaded = (video.uploaded_accounts || []).length > 0;
+  $('previewTitle').textContent = video.name || 'Preview Short';
+  $('previewSubtitle').textContent = video.folder || 'Upload-ready render';
+  $('previewStatus').textContent = uploaded ? 'Uploaded' : 'Pending review';
+  $('previewAccount').textContent = video.content_account_id ? accountName(video.content_account_id) : 'Unassigned / legacy';
+  $('previewSize').textContent = `${video.size_mb || 0} MB`;
+  $('previewModified').textContent = video.modified || '—';
+  $('previewFraming').textContent = video.framing_mode === 'manual' ? 'Manual crop' : (video.frame_editable ? 'Automatic face tracking' : 'Legacy render');
+  $('previewSelectBtn').textContent = selected.has(path) ? 'Remove from selection' : 'Select for upload';
+  $('previewFrameBtn').disabled = !video.frame_editable;
+  $('previewFrameBtn').textContent = video.frame_editable ? 'Adjust frame' : 'No retained edit master';
+  $('previewVideo').src = '/media?path=' + encodeURIComponent(path) + '&_=' + Date.now();
+  if (!$('previewDialog').open) $('previewDialog').showModal();
+}
+
+function closePreview() {
+  const video = $('previewVideo');
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  activePreviewPath = null;
+  if ($('previewDialog').open) $('previewDialog').close();
+}
+
+function togglePreviewSelection() {
+  if (!activePreviewPath) return;
+  const path = activePreviewPath;
+  if (selected.has(path)) selected.delete(path); else selected.add(path);
+  $('previewSelectBtn').textContent = selected.has(path) ? 'Remove from selection' : 'Select for upload';
+  renderVideos();
+  updateCount();
+}
+
+function inspectJob(jobId) {
+  if (!jobId) return;
+  technicalJobId = jobId;
+  nav('activity');
+  if ([...$('techJobSelect').options].some(option => option.value === jobId)) $('techJobSelect').value = jobId;
+  updateTechnicalProgress();
+  $('technicalProgress').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+function handleJobInteraction(event) {
+  const stopButton = event.target.closest?.('[data-stop-job]');
+  if (stopButton) {
+    event.stopPropagation();
+    stopJob(stopButton.dataset.stopJob);
+    return;
+  }
+  const row = event.target.closest?.('[data-job-id]');
+  if (row) inspectJob(row.dataset.jobId);
 }
 
 function showFrameState(message, error = false) {
@@ -612,6 +728,7 @@ async function generateFrom(urlInput, accountInput, button, statusEl) {
 
 function setBusy(button, busy, label) {
   button.disabled = busy;
+  button.classList.toggle('is-busy', busy);
   if (busy) button.dataset.originalText = button.textContent;
   button.textContent = busy ? label : (button.dataset.originalText || label);
 }
@@ -627,9 +744,21 @@ async function postJson(url, body) {
 function nav(section) {
   currentSection = section;
   document.querySelectorAll('.section').forEach(x => x.classList.toggle('active', x.id === section));
-  document.querySelectorAll('.nav').forEach(x => x.classList.toggle('active', x.dataset.section === section));
-  const titles = {settings: 'Accounts & Settings', generate: 'Generate Shorts', activity: 'Activity & History', videos: 'Videos', dashboard: 'Dashboard'};
-  $('pageTitle').textContent = titles[section] || 'Dashboard';
+  document.querySelectorAll('.nav').forEach(x => {
+    const active = x.dataset.section === section;
+    x.classList.toggle('active', active);
+    x.setAttribute('aria-current', active ? 'page' : 'false');
+  });
+  const pages = {
+    settings: ['Accounts', 'Manage publishing destinations and connection status.'],
+    generate: ['Generate', 'Create a new batch of Shorts from a YouTube source.'],
+    activity: ['Activity', 'Follow live processing output and inspect earlier jobs.'],
+    videos: ['Library', 'Review rendered clips, framing state, and account ownership.'],
+    dashboard: ['Overview', 'Generate, review, and publish from one private workspace.'],
+  };
+  const page = pages[section] || pages.dashboard;
+  $('pageTitle').textContent = page[0];
+  $('pageSubtitle').textContent = page[1];
 }
 
 function toast(message) {
@@ -644,10 +773,20 @@ JSON.parseSafe = JSONSafe;
 
 function bindEvents() {
   document.querySelectorAll('.nav').forEach(btn => btn.addEventListener('click', () => nav(btn.dataset.section)));
-  $('refreshBtn').addEventListener('click', loadState);
+  $('refreshBtn').addEventListener('click', async () => {
+    setBusy($('refreshBtn'), true, 'Refreshing…');
+    await loadState();
+    setBusy($('refreshBtn'), false, 'Refresh');
+  });
   $('platform').addEventListener('change', () => { selected.clear(); renderAccountSelects(); renderUploadAccounts(); renderVideos(); updateCount(); });
   $('account').addEventListener('change', () => { selected.clear(); renderVideos(); updateCount(); });
   $('videoAccountFilter').addEventListener('change', renderTable);
+  $('videoStatusFilter').addEventListener('change', renderTable);
+  $('videoSort').addEventListener('change', renderTable);
+  $('videoSearch').addEventListener('input', renderTable);
+  $('jobTypeFilter').addEventListener('change', renderJobs);
+  $('jobStatusFilter').addEventListener('change', renderJobs);
+  $('jobSearch').addEventListener('input', renderJobs);
   $('selectPendingBtn').addEventListener('click', selectPending);
   $('selectAllBtn').addEventListener('click', selectAll);
   $('clearBtn').addEventListener('click', clearSelection);
@@ -656,6 +795,15 @@ function bindEvents() {
   $('closeReviewBtn').addEventListener('click', closeReviewDialog);
   $('cancelReviewBtn').addEventListener('click', closeReviewDialog);
   $('reviewDialog').addEventListener('cancel', e => { e.preventDefault(); closeReviewDialog(); });
+  $('closePreviewBtn').addEventListener('click', closePreview);
+  $('previewSelectBtn').addEventListener('click', togglePreviewSelection);
+  $('previewFrameBtn').addEventListener('click', () => {
+    const path = activePreviewPath;
+    if (!path) return;
+    closePreview();
+    openFrameEditor(path);
+  });
+  $('previewDialog').addEventListener('cancel', e => { e.preventDefault(); closePreview(); });
   $('closeFrameBtn').addEventListener('click', closeFrameEditor);
   $('cancelFrameBtn').addEventListener('click', closeFrameEditor);
   $('saveFrameBtn').addEventListener('click', saveManualFrame);
@@ -704,12 +852,27 @@ function bindEvents() {
     updateFrameOverlay();
   });
   window.addEventListener('resize', updateFrameOverlay);
+  window.addEventListener('offline', () => updateSyncState(false));
+  window.addEventListener('online', loadState);
   $('deleteBtn').addEventListener('click', deleteSelectedShorts);
-  $('jobs').addEventListener('click', e => { const btn = e.target.closest('[data-stop-job]'); if (btn) stopJob(btn.dataset.stopJob); });
+  $('jobs').addEventListener('click', handleJobInteraction);
+  $('generationJobs').addEventListener('click', handleJobInteraction);
+  [$('jobs'), $('generationJobs')].forEach(container => container.addEventListener('keydown', e => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-job-id]')) {
+      e.preventDefault();
+      inspectJob(e.target.dataset.jobId);
+    }
+  }));
   $('techJobSelect').addEventListener('change', () => { technicalJobId = $('techJobSelect').value; updateTechnicalProgress(); });
   $('generateBtn').addEventListener('click', () => generateFrom('generateUrl', 'generateAccount', $('generateBtn'), 'generateStatus'));
   $('generateFullBtn').addEventListener('click', () => generateFrom('generateUrlFull', 'generateAccountFull', $('generateFullBtn'), 'generateStatus'));
   $('videoGrid').addEventListener('click', e => {
+    const previewButton = e.target.closest('[data-preview-path]');
+    if (previewButton) {
+      e.stopPropagation();
+      openPreview(previewButton.dataset.previewPath);
+      return;
+    }
     const frameButton = e.target.closest('[data-frame-path]');
     if (frameButton && !frameButton.disabled) {
       e.stopPropagation();
@@ -726,6 +889,15 @@ function bindEvents() {
       return;
     }
     togglePath(path);
+  });
+  $('videoTable').addEventListener('click', e => {
+    const previewButton = e.target.closest('[data-preview-path]');
+    if (previewButton) {
+      openPreview(previewButton.dataset.previewPath);
+      return;
+    }
+    const frameButton = e.target.closest('[data-frame-path]');
+    if (frameButton && !frameButton.disabled) openFrameEditor(frameButton.dataset.framePath);
   });
 }
 

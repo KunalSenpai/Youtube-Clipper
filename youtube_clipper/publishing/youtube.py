@@ -22,7 +22,10 @@ except ImportError as exc:  # Dry runs do not require Google client libraries.
     class HttpError(Exception):
         pass
 
-from youtube_clipper.metadata.seo import generate_metadata as generate_contextual_metadata
+from youtube_clipper.metadata.seo import (
+    generate_metadata as generate_contextual_metadata,
+    tags_are_near_duplicates,
+)
 from youtube_clipper.publishing.policy import (
     normalize_publishing_mode,
     publishing_action,
@@ -184,6 +187,8 @@ def validate_and_normalize_tags(tags, max_chars=470, allowed_phrases=None):
         key = tag.casefold()
         if key in seen:
             continue
+        if any(tags_are_near_duplicates(tag, existing) for existing in out):
+            continue
 
         # A final payload validator must also reject phrases that did not come
         # from the confirmed source/entity context. This catches stale or
@@ -199,7 +204,9 @@ def validate_and_normalize_tags(tags, max_chars=470, allowed_phrases=None):
         )
         generic_allowed = low in {
             "shorts", "youtube shorts", "tv clips", "web series",
-            "entertainment", "clips",
+            "movie clips", "anime clips", "sports highlights", "news clips",
+            "podcast clips", "music videos", "creator clips", "entertainment",
+            "clips",
         }
 
         if len(tag.split()) == 1 and not supported and not generic_allowed:

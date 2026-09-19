@@ -26,6 +26,24 @@ STOPWORDS = {
 
 URL_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
 
+PROMOTIONAL_IDENTITY_RE = re.compile(
+    r"\b(?:insane details?|details? you|you (?:probably )?missed|did you know|"
+    r"things? you|must watch|watch (?:this|till)|best moments?|top \d+|"
+    r"ending explained|explained ending|hidden details?|facts? you)\b",
+    re.I,
+)
+
+TAG_VARIANT_WORDS = {
+    "clip", "clips", "scene", "scenes", "short", "shorts", "moment",
+    "moments", "quote", "quotes", "dialogue", "edit", "edits", "video",
+    "videos", "show", "series",
+}
+
+SEO_NOISE_TAGS = {
+    "insane", "details", "detail", "missed", "probably", "viral", "crazy",
+    "unbelievable", "amazing", "shocking", "watch", "video",
+}
+
 TYPE_LABELS = {
     "webseries": "TV series",
     "movie": "movie",
@@ -92,7 +110,25 @@ def youtube_tags_character_count(tags: list[str]) -> int:
     return sum(youtube_tag_cost(tag, i > 0) for i, tag in enumerate(tags))
 
 
-def validate_and_normalize_tags(tags: list[str], max_chars: int = 470) -> list[str]:
+def tag_tokens(tag: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", normalize(tag).casefold()))
+
+
+def tags_are_near_duplicates(left: str, right: str) -> bool:
+    """Detect keyword-stuffed variants such as 'Show', 'Show clips', 'Show scenes'."""
+    a = tag_tokens(left)
+    b = tag_tokens(right)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    smaller, larger = (a, b) if len(a) <= len(b) else (b, a)
+    if smaller.issubset(larger) and (larger - smaller).issubset(TAG_VARIANT_WORDS):
+        return True
+    return len(a & b) / len(a | b) >= 0.75
+
+
+def validate_and_normalize_tags(tags: list[str], max_chars: int = 470, max_tags: int = 15) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     total = 0
@@ -102,9 +138,11 @@ def validate_and_normalize_tags(tags: list[str], max_chars: int = 470) -> list[s
         key = tag.casefold()
         if not tag or key in seen:
             continue
+        if any(tags_are_near_duplicates(tag, existing) for existing in out):
+            continue
         if len(tag.split()) == 1:
             word = tag.casefold()
-            if word in STOPWORDS or len(word) < 4 or word.isdigit():
+            if word in STOPWORDS or word in SEO_NOISE_TAGS or len(word) < 4 or word.isdigit():
                 continue
         cost = youtube_tag_cost(tag, bool(out))
         if total + cost > max_chars:
@@ -112,6 +150,8 @@ def validate_and_normalize_tags(tags: list[str], max_chars: int = 470) -> list[s
         seen.add(key)
         out.append(tag)
         total += cost
+        if len(out) >= max_tags:
+            break
 
     return out
 
@@ -174,6 +214,15 @@ def extract_series_name(source_title: str) -> str:
     return title[:80]
 
 
+def useful_series_name(series: str) -> bool:
+    """Reject clickbait headlines that are not a stable show/movie identity."""
+    value = normalize(series)
+    if not value or PROMOTIONAL_IDENTITY_RE.search(value):
+        return False
+    words = re.findall(r"[A-Za-z0-9]+", value)
+    return 1 <= len(words) <= 8 and len(value) <= 55
+
+
 def words_for_clip(transcript: list[dict], start: float, end: float) -> list[dict]:
     words: list[dict] = []
     for segment in transcript:
@@ -232,6 +281,8 @@ def title_hook_text(text: str) -> str:
 def build_title(transcript_text: str, context: dict) -> str:
     hook = title_hook_text(transcript_text)
     series = extract_series_name(context.get("title", "")) if source_confident(context) else ""
+    if not useful_series_name(series):
+        series = ""
 
     # Always attach the identified series/show name. The hook comes from the
     # clip dialogue, but no title is invented from sentiment or assumptions.
@@ -288,16 +339,11 @@ def build_context_tags(context: dict, channel_keywords: list[str] | None = None)
         if tag:
             ranked.append((score, tag))
 
-    if series:
-        # Core source identity.
+    if series and useful_series_name(series):
+        # Keep one strong source identity tag. Near-identical variants such as
+        # "show clips", "show scenes", and "show moments" add no useful reach.
         add(series, 120)
         add(f"{series} clips", 118)
-        add(f"{series} scenes", 116)
-        add(f"{series} shorts", 114)
-        add(f"{series} moments", 112)
-        add(f"{series} quotes", 110)
-        add(f"{series} dialogue", 108)
-        add(f"{series} TV show", 106) if source_type == "webseries" else None
 
         if source_type == "webseries":
             # Only use genre labels when the source-level evidence supports
@@ -316,14 +362,34 @@ def build_context_tags(context: dict, channel_keywords: list[str] | None = None)
             if episode:
                 add(f"{series} season {season} episode {episode}", 98)
 
-        # The detector only writes characters after source-level evidence has
-        # met its reliability threshold. These are context entities, not words
-        # mined from the clip transcript, so they remain isolated per source.
-        for character in context.get("characters", [])[:6]:
-            character = normalize(character)
-            if character:
-                add(character, 96)
+    # The detector only writes characters after source-level evidence has met
+    # its reliability threshold. Keep them even if a clickbait source title is
+    # rejected as the series identity.
+    for character in context.get("characters", [])[:6]:
+        character = normalize(character)
+        if character:
+            add(character, 96)
+            if series and useful_series_name(series):
                 add(f"{character} {series}", 94)
+
+    # Detector keywords are source-level evidence. They add topical breadth
+    # without mining arbitrary dialogue from the individual clip.
+    for keyword in context.get("keywords", [])[:10]:
+        add(keyword, 72)
+
+    discovery_tags = {
+        "webseries": ["YouTube Shorts", "TV clips"],
+        "movie": ["YouTube Shorts", "movie clips"],
+        "anime": ["YouTube Shorts", "anime clips"],
+        "sports": ["YouTube Shorts", "sports highlights"],
+        "news": ["YouTube Shorts", "news clips"],
+        "podcast": ["YouTube Shorts", "podcast clips"],
+        "music_video": ["YouTube Shorts", "music videos"],
+        "creator_video": ["YouTube Shorts", "creator clips"],
+        "unknown": ["YouTube Shorts"],
+    }
+    for tag in discovery_tags.get(source_type, discovery_tags["unknown"]):
+        add(tag, 45)
 
     # Explicitly configured channel keywords are allowed, but only after the
     # source-context tags and never from the transcript.
@@ -371,6 +437,8 @@ def generate_metadata(
         }
 
     series = extract_series_name(context.get("title", "")) if source_confident(context) else ""
+    if not useful_series_name(series):
+        series = ""
     title = build_title(transcript_text, context)
     configured_keywords = (
         channel_keywords
