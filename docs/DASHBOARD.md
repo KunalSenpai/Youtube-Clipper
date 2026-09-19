@@ -42,9 +42,11 @@ are available in the Activity view.
 ## Review and publishing
 
 1. For a newly rendered Short, choose **Adjust frame** if the automatic
-   face-tracked crop needs correction. Drag the 9:16 outline on the full-frame
-   source, set zoom, and choose **Save and re-render**. The source master is
-   retained for later revisions.
+   face-tracked crop needs correction. Seek to a scene change, position the
+   9:16 outline, and choose **Set keyframe**. Repeat wherever the subject moves;
+   the crop position and zoom interpolate smoothly between keyframes. Choose
+   **Save and re-render** when the timeline is ready. The source master and
+   keyframe timeline are retained for later revisions.
 2. Select one or more rendered `short_XX.mp4` files.
 3. Choose **Prepare upload**.
 4. Review or edit the title, description, tags, and visibility.

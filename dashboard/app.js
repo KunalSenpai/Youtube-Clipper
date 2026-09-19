@@ -13,6 +13,9 @@ let activeFramePath = null;
 let activePreviewPath = null;
 let lastSyncAt = null;
 let framePosition = {centerX: 0.5, centerY: 0.5, zoom: 1};
+let frameKeyframes = [];
+let selectedFrameKeyframeTime = null;
+let framePositionDirty = false;
 let framePreviewAnimation = null;
 
 const $ = id => document.getElementById(id);
@@ -131,7 +134,7 @@ function renderVideos() {
         <div class="video-title-row"><label class="check-wrap"><input type="checkbox" class="video-check" data-path="${esc(v.path)}" ${checked ? 'checked' : ''}><span></span></label><b title="${esc(v.name)}">${esc(v.name)}</b></div>
         <small>${esc(v.folder)} · ${v.size_mb} MB</small>
         <div class="badge-row"><span class="badge ${uploaded ? 'done' : ''}">${uploaded ? 'Uploaded' : 'Pending'}</span>${v.legacy ? '<span class="badge legacy">Legacy</span>' : ''}</div>
-        <div class="video-card-actions"><button type="button" class="frame-button" data-preview-path="${esc(v.path)}">Preview</button><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust frame' : 'Regenerate to edit'}</button>${v.framing_mode === 'manual' ? '<span class="badge done">Manual frame</span>' : ''}</div>
+        <div class="video-card-actions"><button type="button" class="frame-button" data-preview-path="${esc(v.path)}">Preview</button><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust frame' : 'Regenerate to edit'}</button>${String(v.framing_mode || '').startsWith('manual') ? `<span class="badge done">${v.framing_mode === 'manual_keyframes' ? 'Keyframed' : 'Manual frame'}</span>` : ''}</div>
       </div>
     </article>`;
   }).join('') || emptyState('01', 'No Shorts in this queue', 'Generate a source video to create your first reviewable clips.');
@@ -406,7 +409,7 @@ function openPreview(path) {
   $('previewAccount').textContent = video.content_account_id ? accountName(video.content_account_id) : 'Unassigned / legacy';
   $('previewSize').textContent = `${video.size_mb || 0} MB`;
   $('previewModified').textContent = video.modified || '—';
-  $('previewFraming').textContent = video.framing_mode === 'manual' ? 'Manual crop' : (video.frame_editable ? 'Automatic face tracking' : 'Legacy render');
+  $('previewFraming').textContent = video.framing_mode === 'manual_keyframes' ? 'Keyframed crop' : (video.framing_mode === 'manual' ? 'Manual crop' : (video.frame_editable ? 'Automatic face tracking' : 'Legacy render'));
   $('previewSelectBtn').textContent = selected.has(path) ? 'Remove from selection' : 'Select for upload';
   $('previewFrameBtn').disabled = !video.frame_editable;
   $('previewFrameBtn').textContent = video.frame_editable ? 'Adjust frame' : 'No retained edit master';
@@ -469,16 +472,27 @@ async function openFrameEditor(path) {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Could not open the framing editor.');
     const framing = data.framing || {};
-    framePosition = {
-      centerX: framing.mode === 'manual' ? Number(framing.center_x ?? 0.5) : 0.5,
-      centerY: framing.mode === 'manual' ? Number(framing.center_y ?? 0.5) : 0.5,
-      zoom: framing.mode === 'manual' ? Number(framing.zoom ?? 1) : 1,
-    };
+    const isManual = String(framing.mode || '').startsWith('manual');
+    const savedKeyframes = Array.isArray(framing.keyframes) && framing.keyframes.length
+      ? framing.keyframes
+      : [{
+          time: 0,
+          center_x: isManual ? Number(framing.center_x ?? 0.5) : 0.5,
+          center_y: isManual ? Number(framing.center_y ?? 0.5) : 0.5,
+          zoom: isManual ? Number(framing.zoom ?? 1) : 1,
+        }];
+    frameKeyframes = normalizeFrameKeyframes(savedKeyframes);
+    selectedFrameKeyframeTime = frameKeyframes[0].time;
+    framePosition = framePositionAt(0);
+    framePositionDirty = false;
     $('frameZoom').value = String(framePosition.zoom);
     $('frameZoomValue').textContent = `${framePosition.zoom.toFixed(2)}×`;
     $('frameSourceVideo').src = '/media?path=' + encodeURIComponent(data.source_master_path) + '&_=' + Date.now();
     $('frameResultVideo').src = '/media?path=' + encodeURIComponent(data.video_path) + '&_=' + Date.now();
-    showFrameState(framing.mode === 'auto_face_tracking' ? 'The saved Short currently uses automatic face tracking. Saving here changes it to your fixed manual crop.' : 'Manual framing loaded.');
+    renderFrameKeyframes();
+    showFrameState(framing.mode === 'auto_face_tracking'
+      ? 'Automatic face tracking is loaded. Add crop keyframes to override it with your manual sequence.'
+      : `${frameKeyframes.length} manual crop keyframe${frameKeyframes.length === 1 ? '' : 's'} loaded.`);
   } catch (e) {
     showFrameState(e.message, true);
     $('saveFrameBtn').disabled = true;
@@ -493,10 +507,104 @@ function closeFrameEditor() {
   $('frameResultVideo').removeAttribute('src');
   $('frameResultVideo').load();
   activeFramePath = null;
+  frameKeyframes = [];
+  selectedFrameKeyframeTime = null;
+  framePositionDirty = false;
   $('saveFrameBtn').disabled = false;
   if (framePreviewAnimation) cancelAnimationFrame(framePreviewAnimation);
   framePreviewAnimation = null;
   $('frameDialog').close();
+}
+
+function normalizeFrameKeyframes(items) {
+  const byTime = new Map();
+  (items || []).forEach(item => {
+    const time = Math.max(0, Number(item.time) || 0);
+    byTime.set(time.toFixed(3), {
+      time: Number(time.toFixed(3)),
+      centerX: Math.max(0, Math.min(1, Number(item.center_x ?? item.centerX ?? 0.5))),
+      centerY: Math.max(0, Math.min(1, Number(item.center_y ?? item.centerY ?? 0.5))),
+      zoom: Math.max(1, Math.min(3, Number(item.zoom ?? 1))),
+    });
+  });
+  const frames = [...byTime.values()].sort((a, b) => a.time - b.time);
+  return frames.length ? frames : [{time: 0, centerX: 0.5, centerY: 0.5, zoom: 1}];
+}
+
+function framePositionAt(time) {
+  if (!frameKeyframes.length) return {centerX: 0.5, centerY: 0.5, zoom: 1};
+  if (time <= frameKeyframes[0].time) return {...frameKeyframes[0]};
+  if (time >= frameKeyframes.at(-1).time) return {...frameKeyframes.at(-1)};
+  for (let index = 0; index < frameKeyframes.length - 1; index += 1) {
+    const left = frameKeyframes[index];
+    const right = frameKeyframes[index + 1];
+    if (time < left.time || time > right.time) continue;
+    const ratio = (time - left.time) / Math.max(0.001, right.time - left.time);
+    return {
+      centerX: left.centerX + (right.centerX - left.centerX) * ratio,
+      centerY: left.centerY + (right.centerY - left.centerY) * ratio,
+      zoom: left.zoom + (right.zoom - left.zoom) * ratio,
+    };
+  }
+  return {...frameKeyframes.at(-1)};
+}
+
+function formatFrameTime(time) {
+  const value = Math.max(0, Number(time) || 0);
+  const minutes = Math.floor(value / 60);
+  const seconds = value % 60;
+  return `${String(minutes).padStart(2, '0')}:${seconds.toFixed(2).padStart(5, '0')}`;
+}
+
+function renderFrameKeyframes() {
+  $('keyframeList').innerHTML = frameKeyframes.map((frame, index) => {
+    const active = selectedFrameKeyframeTime !== null && Math.abs(frame.time - selectedFrameKeyframeTime) < 0.002;
+    return `<button type="button" class="keyframe-chip ${active ? 'active' : ''}" data-keyframe-time="${frame.time}" title="Crop keyframe ${index + 1}"><span>${index + 1}</span>${formatFrameTime(frame.time)}</button>`;
+  }).join('');
+  $('deleteKeyframeBtn').disabled = frameKeyframes.length <= 1 || selectedFrameKeyframeTime === null;
+}
+
+function showFrameAt(time, {selectExact = false} = {}) {
+  const video = $('frameSourceVideo');
+  const safeTime = Math.max(0, Math.min(Number(video.duration) || Number(time) || 0, Number(time) || 0));
+  framePosition = framePositionAt(safeTime);
+  framePositionDirty = false;
+  $('frameZoom').value = String(framePosition.zoom);
+  $('frameTimeline').value = String(safeTime);
+  $('frameTimeValue').textContent = formatFrameTime(safeTime);
+  if (selectExact) {
+    const exact = frameKeyframes.find(frame => Math.abs(frame.time - safeTime) < 0.06);
+    selectedFrameKeyframeTime = exact ? exact.time : null;
+    renderFrameKeyframes();
+  }
+  updateFrameOverlay();
+}
+
+function setCurrentKeyframe({quiet = false} = {}) {
+  const video = $('frameSourceVideo');
+  video.pause();
+  const time = Number((video.currentTime || 0).toFixed(3));
+  const frame = {...framePosition, time};
+  const existing = frameKeyframes.findIndex(item => Math.abs(item.time - time) < 0.06);
+  if (existing >= 0) frameKeyframes[existing] = frame;
+  else frameKeyframes.push(frame);
+  frameKeyframes = normalizeFrameKeyframes(frameKeyframes);
+  selectedFrameKeyframeTime = time;
+  framePositionDirty = false;
+  renderFrameKeyframes();
+  if (!quiet) showFrameState(`Keyframe saved at ${formatFrameTime(time)}. Add another where the subject moves.`);
+}
+
+function deleteCurrentKeyframe() {
+  if (frameKeyframes.length <= 1 || selectedFrameKeyframeTime === null) return;
+  const removedTime = selectedFrameKeyframeTime;
+  frameKeyframes = frameKeyframes.filter(frame => Math.abs(frame.time - removedTime) >= 0.002);
+  const nearest = frameKeyframes.reduce((best, frame) => Math.abs(frame.time - removedTime) < Math.abs(best.time - removedTime) ? frame : best);
+  selectedFrameKeyframeTime = nearest.time;
+  $('frameSourceVideo').currentTime = nearest.time;
+  showFrameAt(nearest.time);
+  renderFrameKeyframes();
+  showFrameState(`Removed the keyframe at ${formatFrameTime(removedTime)}.`);
 }
 
 function frameCropFractions() {
@@ -543,25 +651,45 @@ function drawFramePreview() {
 }
 
 function runFramePreview() {
-  drawFramePreview();
+  const video = $('frameSourceVideo');
+  if (!video.paused && frameKeyframes.length) {
+    framePosition = framePositionAt(video.currentTime || 0);
+    framePositionDirty = false;
+    $('frameZoom').value = String(framePosition.zoom);
+    $('frameTimeline').value = String(video.currentTime || 0);
+    $('frameTimeValue').textContent = formatFrameTime(video.currentTime || 0);
+    updateFrameOverlay();
+  } else {
+    drawFramePreview();
+  }
   if ($('frameDialog').open) framePreviewAnimation = requestAnimationFrame(runFramePreview);
 }
 
 async function saveManualFrame() {
   if (!activeFramePath) return;
+  if (framePositionDirty) setCurrentKeyframe({quiet: true});
   setBusy($('saveFrameBtn'), true, 'Rendering…');
-  showFrameState('Re-rendering the Short with this frame. The full-frame master will be kept.');
+  showFrameState(`Re-rendering the Short with ${frameKeyframes.length} crop keyframe${frameKeyframes.length === 1 ? '' : 's'}.`);
   try {
+    const first = frameKeyframes[0] || {centerX: 0.5, centerY: 0.5, zoom: 1};
     const data = await postJson('/api/reframe', {
       video_path: activeFramePath,
-      center_x: framePosition.centerX,
-      center_y: framePosition.centerY,
-      zoom: framePosition.zoom,
+      center_x: first.centerX,
+      center_y: first.centerY,
+      zoom: first.zoom,
+      keyframes: frameKeyframes.map(frame => ({
+        time: frame.time,
+        center_x: frame.centerX,
+        center_y: frame.centerY,
+        zoom: frame.zoom,
+      })),
     });
     if (!data.ok) throw new Error(data.error || 'Could not save the new frame.');
+    frameKeyframes = normalizeFrameKeyframes(data.framing?.keyframes || frameKeyframes);
+    renderFrameKeyframes();
     $('frameResultVideo').src = '/media?path=' + encodeURIComponent(activeFramePath) + '&_=' + Date.now();
-    showFrameState('Saved. The upload-ready Short now uses this manual frame.');
-    toast('Short re-rendered with the new frame.');
+    showFrameState('Saved. The upload-ready Short now follows your crop timeline.');
+    toast('Short re-rendered with crop keyframes.');
     await loadState();
   } catch (e) {
     showFrameState(e.message, true);
@@ -809,23 +937,70 @@ function bindEvents() {
   $('saveFrameBtn').addEventListener('click', saveManualFrame);
   $('frameDialog').addEventListener('cancel', e => { e.preventDefault(); closeFrameEditor(); });
   $('frameSourceVideo').addEventListener('loadedmetadata', () => {
+    $('frameTimeline').max = String($('frameSourceVideo').duration || 1);
+    $('frameTimeline').value = '0';
+    $('frameTimeValue').textContent = formatFrameTime(0);
+    showFrameAt(0, {selectExact: true});
     updateFrameOverlay();
     if (framePreviewAnimation) cancelAnimationFrame(framePreviewAnimation);
     runFramePreview();
   });
+  $('frameSourceVideo').addEventListener('timeupdate', () => {
+    const video = $('frameSourceVideo');
+    $('frameTimeline').value = String(video.currentTime || 0);
+    $('frameTimeValue').textContent = formatFrameTime(video.currentTime || 0);
+    if (!video.paused) framePositionDirty = false;
+  });
+  $('frameSourceVideo').addEventListener('seeked', () => showFrameAt($('frameSourceVideo').currentTime, {selectExact: true}));
+  $('frameSourceVideo').addEventListener('play', () => {
+    selectedFrameKeyframeTime = null;
+    framePositionDirty = false;
+    renderFrameKeyframes();
+  });
+  $('frameTimeline').addEventListener('input', e => {
+    const video = $('frameSourceVideo');
+    video.pause();
+    video.currentTime = Number(e.target.value);
+    showFrameAt(video.currentTime, {selectExact: true});
+  });
+  $('setKeyframeBtn').addEventListener('click', () => setCurrentKeyframe());
+  $('deleteKeyframeBtn').addEventListener('click', deleteCurrentKeyframe);
+  $('keyframeList').addEventListener('click', e => {
+    const button = e.target.closest('[data-keyframe-time]');
+    if (!button) return;
+    const time = Number(button.dataset.keyframeTime);
+    const video = $('frameSourceVideo');
+    video.pause();
+    selectedFrameKeyframeTime = time;
+    video.currentTime = time;
+    showFrameAt(time);
+    renderFrameKeyframes();
+  });
+  document.querySelectorAll('[data-frame-preset]').forEach(button => button.addEventListener('click', () => {
+    $('frameSourceVideo').pause();
+    const preset = button.dataset.framePreset;
+    framePosition.centerX = preset === 'left' ? 0 : (preset === 'right' ? 1 : 0.5);
+    framePositionDirty = true;
+    updateFrameOverlay();
+  }));
   $('frameZoom').addEventListener('input', e => {
+    $('frameSourceVideo').pause();
     framePosition.zoom = Number(e.target.value);
+    framePositionDirty = true;
     updateFrameOverlay();
   });
   $('centerFrameBtn').addEventListener('click', () => {
+    $('frameSourceVideo').pause();
     framePosition.centerX = 0.5;
     framePosition.centerY = 0.5;
     framePosition.zoom = 1;
+    framePositionDirty = true;
     $('frameZoom').value = '1';
     updateFrameOverlay();
   });
   let dragOffset = null;
   $('cropOverlay').addEventListener('pointerdown', e => {
+    $('frameSourceVideo').pause();
     const box = $('cropOverlay').getBoundingClientRect();
     dragOffset = {x: e.clientX - (box.left + box.width / 2), y: e.clientY - (box.top + box.height / 2)};
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -835,6 +1010,7 @@ function bindEvents() {
     const video = $('frameSourceVideo').getBoundingClientRect();
     framePosition.centerX = (e.clientX - dragOffset.x - video.left) / video.width;
     framePosition.centerY = (e.clientY - dragOffset.y - video.top) / video.height;
+    framePositionDirty = true;
     updateFrameOverlay();
   });
   $('cropOverlay').addEventListener('pointerup', e => {
@@ -849,6 +1025,7 @@ function bindEvents() {
     else if (e.key === 'ArrowDown') framePosition.centerY += step;
     else return;
     e.preventDefault();
+    framePositionDirty = true;
     updateFrameOverlay();
   });
   window.addEventListener('resize', updateFrameOverlay);

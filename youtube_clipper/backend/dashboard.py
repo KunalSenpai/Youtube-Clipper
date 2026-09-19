@@ -805,6 +805,7 @@ class Handler(BaseHTTPRequestHandler):
                         body.get("center_x", 0.5),
                         body.get("center_y", 0.5),
                         body.get("zoom", 1.0),
+                        body.get("keyframes"),
                     )
                 finally:
                     with PROCESS_LOCK:

@@ -60,7 +60,76 @@ def normalize_framing(center_x, center_y, zoom):
     )
 
 
-def reframe_short(video_path, center_x, center_y, zoom):
+def normalize_keyframes(keyframes, duration=None):
+    """Validate, sort and deduplicate manual framing keyframes."""
+    if not isinstance(keyframes, list):
+        raise ValueError("Framing keyframes must be a list.")
+    if len(keyframes) > 100:
+        raise ValueError("A Short can have at most 100 framing keyframes.")
+
+    normalized = {}
+    for item in keyframes:
+        if not isinstance(item, dict):
+            raise ValueError("Each framing keyframe must be an object.")
+        try:
+            timestamp = float(item.get("time", 0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Keyframe times must be numbers.") from exc
+        if not math.isfinite(timestamp):
+            raise ValueError("Keyframe times must be finite numbers.")
+        timestamp = max(0.0, timestamp)
+        if duration is not None:
+            timestamp = min(float(duration), timestamp)
+        center_x, center_y, zoom = normalize_framing(
+            item.get("center_x", 0.5),
+            item.get("center_y", 0.5),
+            item.get("zoom", 1.0),
+        )
+        key = round(timestamp, 3)
+        normalized[key] = {
+            "time": key,
+            "center_x": round(center_x, 5),
+            "center_y": round(center_y, 5),
+            "zoom": round(zoom, 3),
+        }
+
+    ordered = [normalized[key] for key in sorted(normalized)]
+    if not ordered:
+        raise ValueError("At least one framing keyframe is required.")
+    if ordered[0]["time"] > 0:
+        ordered.insert(0, {**ordered[0], "time": 0.0})
+    return ordered
+
+
+def _interpolate_normalized(frames, timestamp):
+    try:
+        timestamp = float(timestamp)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("The framing timestamp must be a number.") from exc
+    if not math.isfinite(timestamp):
+        raise ValueError("The framing timestamp must be finite.")
+    if timestamp <= frames[0]["time"]:
+        return frames[0]["center_x"], frames[0]["center_y"], frames[0]["zoom"]
+    if timestamp >= frames[-1]["time"]:
+        return frames[-1]["center_x"], frames[-1]["center_y"], frames[-1]["zoom"]
+
+    for left, right in zip(frames, frames[1:]):
+        if left["time"] <= timestamp <= right["time"]:
+            span = right["time"] - left["time"]
+            ratio = 0.0 if span <= 0 else (timestamp - left["time"]) / span
+            return tuple(
+                left[field] + (right[field] - left[field]) * ratio
+                for field in ("center_x", "center_y", "zoom")
+            )
+    return frames[-1]["center_x"], frames[-1]["center_y"], frames[-1]["zoom"]
+
+
+def interpolate_framing(keyframes, timestamp):
+    """Linearly interpolate framing values at a point on the clip timeline."""
+    return _interpolate_normalized(normalize_keyframes(keyframes), timestamp)
+
+
+def reframe_short(video_path, center_x=0.5, center_y=0.5, zoom=1.0, keyframes=None):
     try:
         import cv2
     except ImportError as exc:
@@ -93,12 +162,21 @@ def reframe_short(video_path, center_x, center_y, zoom):
     source_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     source_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    duration = frame_count / fps if frame_count > 0 and fps > 0 else None
     if not cap.isOpened() or source_width < 2 or source_height < 2:
         cap.release()
         raise ValueError("The full-frame editing master could not be opened.")
 
+    framing_keyframes = normalize_keyframes(
+        keyframes if keyframes is not None else [{
+            "time": 0, "center_x": center_x, "center_y": center_y, "zoom": zoom,
+        }],
+        duration=duration,
+    )
+    first = framing_keyframes[0]
     left, top, crop_width, crop_height = crop_geometry(
-        source_width, source_height, center_x, center_y, zoom
+        source_width, source_height, first["center_x"], first["center_y"], first["zoom"]
     )
     token = uuid.uuid4().hex[:10]
     cropped_temp = output_file.with_name(f".{output_file.stem}.{token}.video.mp4")
@@ -116,6 +194,13 @@ def reframe_short(video_path, center_x, center_y, zoom):
             ok, frame = cap.read()
             if not ok:
                 break
+            current_time = frames / fps
+            frame_center_x, frame_center_y, frame_zoom = _interpolate_normalized(
+                framing_keyframes, current_time
+            )
+            left, top, crop_width, crop_height = crop_geometry(
+                source_width, source_height, frame_center_x, frame_center_y, frame_zoom
+            )
             cropped = frame[top:top + crop_height, left:left + crop_width]
             resized = cv2.resize(cropped, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
             writer.write(resized)
@@ -160,12 +245,14 @@ def reframe_short(video_path, center_x, center_y, zoom):
         cropped_temp.unlink(missing_ok=True)
         final_temp.unlink(missing_ok=True)
 
-    manifest["schema_version"] = max(2, int(manifest.get("schema_version", 1)))
+    manifest["schema_version"] = max(3, int(manifest.get("schema_version", 1)))
     manifest["framing"] = {
-        "mode": "manual",
-        "center_x": round(float(center_x), 5),
-        "center_y": round(float(center_y), 5),
-        "zoom": round(float(zoom), 3),
+        "mode": "manual_keyframes" if len(framing_keyframes) > 1 else "manual",
+        "center_x": first["center_x"],
+        "center_y": first["center_y"],
+        "zoom": first["zoom"],
+        "interpolation": "linear",
+        "keyframes": framing_keyframes,
         "crop_pixels": {
             "left": left,
             "top": top,

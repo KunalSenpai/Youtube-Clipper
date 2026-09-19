@@ -203,7 +203,11 @@ check("API payload preserves private scheduling", scheduled_body["status"] == {
 # TEST 6: manual framing geometry
 # ------------------------------------------------------------------
 print("\n=== TEST 6: Manual framing geometry ===")
-from youtube_clipper.video.framing import crop_geometry
+from youtube_clipper.video.framing import (
+    crop_geometry,
+    interpolate_framing,
+    normalize_keyframes,
+)
 
 check(
     "Landscape zoom 1 keeps the complete source height",
@@ -225,6 +229,20 @@ try:
 except ValueError:
     rejected_invalid_framing = True
 check("Invalid framing values are rejected", rejected_invalid_framing)
+keyframes = normalize_keyframes([
+    {"time": 0, "center_x": 0.2, "center_y": 0.5, "zoom": 1},
+    {"time": 5, "center_x": 0.8, "center_y": 0.5, "zoom": 2},
+])
+midpoint = interpolate_framing(keyframes, 2.5)
+check("Keyframe interpolation moves horizontally", abs(midpoint[0] - 0.5) < 0.0001)
+check("Keyframe interpolation changes zoom", abs(midpoint[2] - 1.5) < 0.0001)
+check("Keyframes hold their final position", interpolate_framing(keyframes, 8) == (0.8, 0.5, 2.0))
+deduped_keyframes = normalize_keyframes([
+    {"time": 2, "center_x": 0.2, "center_y": 0.5, "zoom": 1},
+    {"time": 2, "center_x": 0.9, "center_y": 0.5, "zoom": 1},
+])
+check("Duplicate keyframe times use the latest edit", deduped_keyframes[-1]["center_x"] == 0.9)
+check("A starting keyframe is inserted automatically", deduped_keyframes[0]["time"] == 0)
 
 
 # ------------------------------------------------------------------

@@ -137,9 +137,10 @@ details.
 2. Generate Shorts from a supported YouTube URL, or place a local source in
    `input/` and run the command-line workflow.
 3. Preview each rendered Short. New renders include an **Adjust frame** control:
-   drag a 9:16 crop over the retained full-frame clip, optionally change zoom,
-   then save to re-render that Short. Automatic face tracking remains the
-   initial framing until a manual crop is saved.
+   seek to a point in the retained full-frame clip, position the 9:16 crop,
+   and set a keyframe. Add more keyframes when the subject moves left, center,
+   or right; the renderer moves and zooms smoothly between them. Automatic
+   face tracking remains the initial framing until manual keyframes are saved.
 4. Select one or more rendered Shorts.
 5. Choose **Prepare upload**.
 6. Review the video, title, description, tags, validation result, visibility,
@@ -151,8 +152,9 @@ calls.
 
 The framing editor is available for newly generated Shorts. Each one retains a
 full-frame H.264 editing master next to the upload-ready 9:16 file, so manual
-adjustments never crop an already-cropped render. These masters use additional
-disk space and are removed with the Short when **Delete Shorts** is used.
+keyframes never crop an already-cropped render. Saved timelines can be reopened
+and revised. These masters use additional disk space and are removed with the
+Short when **Delete Shorts** is used.
 
 ## Command-line usage
 
