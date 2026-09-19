@@ -191,6 +191,17 @@ def download_youtube(url=None):
     # it is available even when adaptive/SABR format selection is problematic.
     attempts = [
         ("combined MP4 format 18", ["-f", "18"]),
+        # OpenCV's bundled decoder is not guaranteed to decode AV1 even when
+        # the system FFmpeg can. Prefer a CPU-friendly H.264 source capped at
+        # 1080p before falling back to arbitrary MP4 codecs.
+        ("H.264 MP4 video + M4A audio", [
+            "-f",
+            "bv*[vcodec^=avc1][height<=1080][ext=mp4]+ba[ext=m4a]/"
+            "b[vcodec^=avc1][height<=1080][ext=mp4]/18",
+        ]),
+        ("combined H.264 MP4", [
+            "-f", "b[vcodec^=avc1][height<=1080][ext=mp4]/18",
+        ]),
         ("combined MP4 over HTTPS", ["-f", "b[ext=mp4][protocol=https]/b[ext=mp4]/b"]),
         ("MP4 video + M4A audio", ["-f", "bv*[ext=mp4][protocol=https]+ba[ext=m4a][protocol=https]/bv*[ext=mp4]+ba[ext=m4a]"]),
         ("combined MP4 with TV/Web/iOS clients", [
@@ -1930,6 +1941,7 @@ def render_short(
     crop_width_base = int(source_height * 9 / 16)
     crop_width_base = min(crop_width_base, source_width)
     frame_number = 0
+    written_frames = 0
     interval_index = 0
 
     while True:
@@ -1978,10 +1990,18 @@ def render_short(
         cropped = frame[:, left:left + crop_width]
         cropped = cv2.resize(cropped, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
         writer.write(cropped)
+        written_frames += 1
         frame_number += 1
 
     cap.release()
     writer.release()
+
+    if written_frames == 0:
+        print(
+            "ERROR: OpenCV could not decode any frames for this Short. "
+            "The source codec may not be supported by OpenCV."
+        )
+        return False
 
     # --------------------------------------------------------
     # CAPTIONS
@@ -2164,6 +2184,11 @@ print(
 )
 
 print()
+
+failed = len(selected) - successful
+if failed:
+    print(f"ERROR: {failed} of {len(selected)} selected Shorts failed to render.")
+    sys.exit(1)
 
 if os.environ.get("YT_AUTO_BOT_SOURCE_MODE", "").strip().lower() not in {"local", "youtube"}:
     input("Press Enter to exit...")
