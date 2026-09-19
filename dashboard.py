@@ -861,7 +861,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class LocalDashboardServer(ThreadingHTTPServer):
-    allow_reuse_address = False
+    # systemd may restart the dashboard while the previous listener is still
+    # leaving TCP's closing state. Reusing the local address avoids a restart
+    # loop with "OSError: [Errno 98] Address already in use".
+    allow_reuse_address = True
 
 
 def main():
