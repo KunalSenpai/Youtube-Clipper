@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -36,6 +37,7 @@ from youtube_clipper.publishing.payload import (
     build_video_insert_body,
 )
 from youtube_clipper import config as bot_config
+from youtube_clipper.publishing.storage import upload_log_lock, atomic_save_json
 
 # ============================================================
 # CONFIG
@@ -462,10 +464,35 @@ def format_srt_time(seconds):
 
 
 def create_srt(clip, transcript, index, clip_key=""):
+    # The retained ASS is authoritative: it has render timing and any caption
+    # edits. Regenerating from the transcript would discard those edits.
+    caption_file = clip.get("rendered_caption_file")
+    if caption_file and Path(caption_file).is_file():
+        import pysubs2
+        safe_key = re.sub(r"[^A-Za-z0-9_-]+", "_", clip_key or "clip")[:80]
+        srt_path = TEMP_DIR / f"youtube_caption_{safe_key}_{index:02d}.srt"
+        pysubs2.load(str(caption_file), encoding="utf-8").save(str(srt_path), format_="srt", encoding="utf-8")
+        return srt_path
     start = float(clip["start"])
     end = float(clip["end"])
 
     words = words_for_clip(transcript, start, end)
+
+    timeline = clip.get("timeline")
+    if timeline:
+        mapped_words = []
+        for word in words:
+            # Intersect words with retained intervals; omitted audio must never
+            # acquire a subtitle at an unrelated position in the output.
+            for interval in timeline:
+                left = max(word["start"], interval["source_start"])
+                right = min(word["end"], interval["source_end"])
+                if right > left:
+                    offset = interval["output_start"] - interval["source_start"]
+                    mapped_words.append({**word, "start": left + offset, "end": right + offset})
+        words = mapped_words
+        start = 0.0
+        end = max(item["output_start"] + item["source_end"] - item["source_start"] for item in timeline)
 
     if not words:
         return None
@@ -878,7 +905,7 @@ def load_upload_log():
 
 
 def save_upload_log(data):
-    save_json(UPLOAD_LOG, data)
+    atomic_save_json(UPLOAD_LOG, data)
 
 
 def scheduled_videos_from_upload_log(upload_log):
@@ -947,6 +974,9 @@ def load_short_manifest(video_path):
     transcript = load_json(transcript_path, []) if transcript_path.exists() else []
     if not transcript:
         return None
+    clip = dict(clip)
+    if data.get("caption_file"):
+        clip["rendered_caption_file"] = data["caption_file"]
     return clip, transcript, None
 
 
@@ -977,6 +1007,13 @@ def resolve_clip_binding(video_path, selection_map):
 # ============================================================
 
 def main():
+    # Lock before reading history and hold through remote insertion and local
+    # persistence. OS locks are released even if the process is terminated.
+    with (nullcontext() if DRY_RUN else upload_log_lock(UPLOAD_LOG)):
+        return _main()
+
+
+def _main():
     OUTPUT_DIR.mkdir(exist_ok=True)
     TEMP_DIR.mkdir(exist_ok=True)
 
@@ -1344,6 +1381,18 @@ def main():
         )
         video_id = response["id"]
 
+        # The insertion has succeeded. Record it before any optional follow-up
+        # can fail so a retry cannot publish a second copy.
+        upload_log[key] = {
+            "video_id": video_id,
+            "title": metadata["title"],
+            "privacyStatus": privacy,
+            "publishAt": publish_at.isoformat().replace("+00:00", "Z") if publish_at else None,
+            "caption_uploaded": False,
+            "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        save_upload_log(upload_log)
+
         caption_uploaded = False
         if UPLOAD_YOUTUBE_CAPTIONS and transcript:
             clip_key = (
@@ -1353,6 +1402,8 @@ def main():
             srt_path = create_srt(clip, transcript, index, clip_key=clip_key)
             caption_uploaded = upload_caption(youtube, video_id, srt_path)
 
+        upload_log[key]["caption_uploaded"] = caption_uploaded
+        save_upload_log(upload_log)
         verified = verify_video(youtube, video_id)
         actual = verified.get("status", {}) if verified else {}
 
@@ -1367,20 +1418,6 @@ def main():
             print("WARNING: YouTube did not leave the upload PUBLIC.")
             print("This can happen when the API project/account is restricted.")
             print("The bot cannot bypass a YouTube API restriction.")
-
-        upload_log[key] = {
-            "video_id": video_id,
-            "title": metadata["title"],
-            "privacyStatus": privacy,
-            "publishAt": (
-                publish_at.isoformat().replace("+00:00", "Z")
-                if publish_at
-                else None
-            ),
-            "caption_uploaded": caption_uploaded,
-            "uploaded_at": datetime.now(timezone.utc).isoformat(),
-        }
-        save_upload_log(upload_log)
 
         print()
         print("Done:")

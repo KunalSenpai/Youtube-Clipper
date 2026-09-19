@@ -2106,6 +2106,9 @@ def render_short(
     print()
     print("SUCCESS:")
     print(output_file)
+    from youtube_clipper.video.captions import retain_clean_video
+    retain_clean_video(temp_video, output_file, output_file.with_suffix(".clean.mp4"))
+    clip["timeline"] = timeline
     return True
 
 

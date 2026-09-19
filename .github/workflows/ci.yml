@@ -31,5 +31,16 @@ jobs:
       - name: Run regression checks
         run: python -m tests.test_isolation
 
+      - name: Install caption test dependency
+        run: python -m pip install pysubs2
+
+      - name: Check publishing safety and caption timing
+        run: python -m unittest tests.test_publishing_safety tests.test_storage_cleanup tests.test_captions
+
       - name: Validate dashboard JavaScript
-        run: node --check dashboard/app.js
+        run: |
+          node --check dashboard/app.js
+          node --check dashboard/captions.js
+
+      - name: Check crop editor transitions
+        run: node tests/test_crop_editor.cjs

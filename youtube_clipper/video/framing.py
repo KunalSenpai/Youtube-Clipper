@@ -240,6 +240,8 @@ def reframe_short(video_path, center_x=0.5, center_y=0.5, zoom=1.0, keyframes=No
         if result.returncode != 0 or not final_temp.is_file():
             detail = (result.stderr or result.stdout or "FFmpeg failed.")[-1200:]
             raise RuntimeError(detail)
+        from youtube_clipper.video.captions import retain_clean_video
+        retain_clean_video(cropped_temp, output_file, output_file.with_suffix(".clean.mp4"))
         os.replace(final_temp, output_file)
     finally:
         cropped_temp.unlink(missing_ok=True)

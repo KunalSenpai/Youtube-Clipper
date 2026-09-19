@@ -138,9 +138,9 @@ details.
    `input/` and run the command-line workflow.
 3. Preview each rendered Short. New renders include an **Adjust frame** control:
    seek to a point in the retained full-frame clip, position the 9:16 crop,
-   and set a keyframe. Add more keyframes when the subject moves left, center,
-   or right; the renderer moves and zooms smoothly between them. Automatic
-   face tracking remains the initial framing until manual keyframes are saved.
+   and release to keep a crop point. Add more points when the subject moves left, center,
+   or right; the renderer moves and zooms smoothly between them. Use Play preview and Undo to refine the movement, then choose Save crop.
+   Automatic tracking is replaced only when you save the manual crop.
 4. Select one or more rendered Shorts.
 5. Choose **Prepare upload**.
 6. Review the video, title, description, tags, validation result, visibility,
@@ -233,6 +233,8 @@ Run the regression checks:
 
 ```bash
 python -m tests.test_isolation
+python -m unittest tests.test_publishing_safety
+python -m unittest tests.test_storage_cleanup tests.test_captions
 ```
 
 Validate all Python files:
@@ -242,7 +244,13 @@ python -m compileall -q .
 ```
 
 The test suite covers metadata isolation, source-name regressions, URL leakage,
-upload confirmation defaults, visibility policy, and scheduled payloads.
+upload confirmation defaults, visibility policy, scheduled payloads, cross-origin
+request protection, upload-log locking and durability, and caption timing.
+
+Live uploads sharing an upload log cannot run concurrently. A second upload
+fails with a retry message while the first is active. New renders retain their
+compressed timeline for subtitle timing; older editing manifests reuse their
+retained caption layout when available.
 
 ## Self-hosting
 
@@ -277,3 +285,37 @@ first.
 
 No open-source license has been selected yet. Until a license is added, the
 repository is publicly viewable but standard copyright restrictions apply.
+
+## Storage cleanup
+
+Open **Storage** to inspect output, cache, input, and log sizes alongside free
+space. Select an age filter (30 days by default), review and select eligible
+files, then choose **Delete selected files** and confirm.
+
+Cleanup removes only editing masters and leftover render scratch videos.
+Deleting a master disables **Adjust frame** until the Short is regenerated.
+Finished Shorts, captions, transcripts, source downloads, manifests, credentials,
+review reports, and upload history are preserved. Changed files are rejected;
+partial failures show what could not be deleted and the space reclaimed.
+
+Cleanup is blocked while dashboard jobs are queued or running. Stop separately
+launched command-line processing before cleanup; those processes are not tracked
+by the dashboard. Cleanup is manual, never automatic.
+
+## Caption editor
+
+Choose **Captions** on a Short in the overview or library. Edit text and start/end
+seconds, preview each line, or add and remove lines. **Save captions** re-renders
+that local Short and updates the subtitles used by future uploads. Videos already
+published on YouTube are unchanged.
+
+New generations and crop saves retain a caption-free `.clean.mp4` editing copy
+with the current crop and audio. Older Shorts need their crop saved again or must
+be regenerated before caption editing is available. Edited lines use steady text;
+unchanged lines retain their original highlighting. The preview approximates text
+placement; the render retains the existing ASS caption style.
+
+Caption saves reject overlapping/out-of-range times, stale edits, and active
+dashboard jobs. Stop separate command-line processing before editing. Storage
+cleanup can remove these clean editing copies; final Shorts and subtitle files
+are preserved.

@@ -41,12 +41,15 @@ are available in the Activity view.
 
 ## Review and publishing
 
-1. For a newly rendered Short, choose **Adjust frame** if the automatic
-   face-tracked crop needs correction. Seek to a scene change, position the
-   9:16 outline, and choose **Set keyframe**. Repeat wherever the subject moves;
-   the crop position and zoom interpolate smoothly between keyframes. Choose
-   **Save and re-render** when the timeline is ready. The source master and
-   keyframe timeline are retained for later revisions.
+1. Choose **Adjust frame** to open the manual crop editor. Drag the 9:16 box
+   or use Left, Center, Right, and Zoom. Completed adjustments are kept as
+   crop points automatically. One point holds a fixed crop; seek to another
+   time and adjust the box to create smooth movement. **Previous**, **Next**,
+   and the time chips jump between points. Use **Play preview** to check the
+   movement, **Undo last change** to undo an edit, or **Remove point** to
+   remove a movement point (the Start point is retained). Choose **Save crop**
+   to render the result. The centered manual preview replaces automatic face
+   tracking only when saved. Expand **Compare with saved Short** to compare.
 2. Select one or more rendered `short_XX.mp4` files.
 3. Choose **Prepare upload**.
 4. Review or edit the title, description, tags, and visibility.

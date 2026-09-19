@@ -22,6 +22,9 @@ from urllib.parse import parse_qs, urlparse
 
 from youtube_clipper import config as bot_config
 from youtube_clipper.video.framing import reframe_short as apply_manual_framing
+from youtube_clipper.publishing.storage import upload_log_lock, atomic_save_json
+from youtube_clipper.backend.storage import inventory as storage_inventory, cleanup as cleanup_storage
+from youtube_clipper.video.captions import caption_info, save_captions
 
 ROOT = bot_config.PROJECT_ROOT
 OUTPUT = bot_config.OUTPUT_DIR
@@ -46,6 +49,7 @@ APPJS = DASHBOARD_DIR / "app.js"
 # Live subprocess registry. Threads alone cannot terminate a child process;
 # keeping Popen handles lets the Stop button terminate the complete process tree.
 PROCESS_LOCK = threading.RLock()
+MUTATION_LOCK = threading.RLock()
 ACTIVE_PROCESSES: dict[str, subprocess.Popen] = {}
 CANCELLED_JOBS: set[str] = set()
 ACTIVE_REFRAMES: set[str] = set()
@@ -149,6 +153,7 @@ def all_videos(account_id=None):
             "content_account_id": owner,
             "legacy": owner is None,
             "frame_editable": bool(source_master),
+            "caption_editable": path.with_suffix(".clean.mp4").is_file(),
             "framing_mode": (manifest.get("framing") or {}).get("mode") if manifest else None,
         })
     return rows
@@ -379,6 +384,7 @@ def delete_shorts(paths):
                             derivative_files.append(derivative)
                 except Exception: pass
             p.unlink(missing_ok=True)
+            p.with_suffix(".clean.mp4").unlink(missing_ok=True)
             for derivative in derivative_files:
                 derivative.unlink(missing_ok=True)
             if manifest.exists(): manifest.unlink(missing_ok=True)
@@ -393,13 +399,19 @@ def delete_shorts(paths):
     # Remove deleted files from every account upload log so the local duplicate
     # cache cannot retain references to files that no longer exist.
     for account in load_accounts().get("accounts",[]):
-        path=account_log_path(account); data=load_log(account)
-        changed=False
-        for key in list(data):
-            if str(Path(key).resolve()) in targets:
-                data.pop(key,None); changed=True
-        if changed:
-            path.parent.mkdir(parents=True,exist_ok=True); path.write_text(json.dumps(data,indent=2,ensure_ascii=False),encoding="utf-8")
+        path = account_log_path(account)
+        try:
+            with upload_log_lock(path):
+                data = load_log(account)
+                changed = False
+                for key in list(data):
+                    if str(Path(key).resolve()) in targets:
+                        data.pop(key, None)
+                        changed = True
+                if changed:
+                    atomic_save_json(path, data)
+        except RuntimeError as exc:
+            errors.append({"path": str(path), "error": str(exc)})
     # Remove dashboard execution logs whose job referenced one of the deleted
     # Shorts. The SQLite history itself remains intact for auditability.
     for j in job_rows():
@@ -623,8 +635,14 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        reconcile_stale_jobs()
         parsed = urlparse(self.path)
+
+        if parsed.path == "/api/storage":
+            try:
+                days = int(parse_qs(parsed.query).get("days", ["30"])[0])
+                return json_response(self, storage_inventory(ROOT, days))
+            except (ValueError, OSError) as exc:
+                return json_response(self, {"error": str(exc)}, 400)
 
         if parsed.path == "/api/state":
             accounts = load_accounts().get("accounts", [])
@@ -685,6 +703,15 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return json_response(self, {"error": str(exc)}, 404)
 
+        if parsed.path == "/api/captions":
+            video = safe_output_file(parse_qs(parsed.query).get("path", [""])[0])
+            try:
+                if not video:
+                    raise ValueError("The selected Short is unavailable.")
+                return json_response(self, caption_info(video))
+            except (ValueError, OSError, KeyError, ImportError) as exc:
+                return json_response(self, {"error": str(exc)}, 400)
+
         if parsed.path == "/media":
             raw = parse_qs(parsed.query).get("path", [""])[0]
             path = safe_media_file(raw)
@@ -699,6 +726,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.serve(STYLE, "text/css; charset=utf-8")
         if parsed.path == "/app.js":
             return self.serve(APPJS, "application/javascript; charset=utf-8")
+        if parsed.path == "/captions.js":
+            return self.serve(DASHBOARD_DIR / "captions.js", "application/javascript; charset=utf-8")
         self.send_error(404)
 
     def serve(self, path, content_type):
@@ -762,10 +791,31 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_POST(self):
+        # Serialize mutations so no dashboard job can start during cleanup.
+        with MUTATION_LOCK:
+            return self.handle_mutation()
+
+    def handle_mutation(self):
+        # Browser mutations must come from the dashboard itself. Keep JSON API
+        # clients working, but reject simple cross-site form/fetch requests.
+        origin = self.headers.get("Origin")
+        origin_url = urlparse(origin or "")
+        if (
+            self.headers.get("Sec-Fetch-Site") == "cross-site"
+            or (origin is not None and (
+                origin_url.scheme not in {"http", "https"}
+                or origin_url.netloc.lower() != self.headers.get("Host", "").lower()
+            ))
+        ):
+            return json_response(self, {"error": "Cross-origin requests are not allowed."}, 403)
+        if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+            return json_response(self, {"error": "Content-Type must be application/json."}, 415)
         parsed = urlparse(self.path)
         if parsed.path not in {
             "/api/upload", "/api/prepare", "/api/approve",
             "/api/generate", "/api/stop", "/api/delete", "/api/reframe",
+            "/api/storage/cleanup",
+            "/api/captions",
         }:
             self.send_error(404)
             return
@@ -773,6 +823,24 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             body = json.loads(self.rfile.read(length).decode("utf-8"))
+            if parsed.path == "/api/captions":
+                video = safe_output_file(body.get("video_path", ""))
+                if not video:
+                    raise ValueError("The selected Short is unavailable.")
+                with db() as conn:
+                    busy = conn.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running') LIMIT 1").fetchone()
+                if busy or ACTIVE_PROCESSES or ACTIVE_REFRAMES:
+                    return json_response(self, {"error": "Wait for active jobs to finish before editing captions."}, 409)
+                return json_response(self, {"ok": True, **save_captions(video, body.get("cues"), body.get("revision"))})
+            if parsed.path == "/api/storage/cleanup":
+                with db() as conn:
+                    busy = conn.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running') LIMIT 1").fetchone()
+                with PROCESS_LOCK:
+                    busy = busy or bool(ACTIVE_PROCESSES) or bool(ACTIVE_REFRAMES)
+                if busy:
+                    return json_response(self, {"error": "Wait for active dashboard jobs to finish before cleanup."}, 409)
+                result = cleanup_storage(ROOT, body.get("files"), body.get("days", 30))
+                return json_response(self, result)
             if parsed.path == "/api/stop":
                 ok, message = stop_job(str(body.get("job_id", "")))
                 return json_response(self, {"ok": ok, "message": message}, 200 if ok else 409)

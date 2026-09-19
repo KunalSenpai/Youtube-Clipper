@@ -14,6 +14,8 @@ let activePreviewPath = null;
 let lastSyncAt = null;
 let framePosition = {centerX: 0.5, centerY: 0.5, zoom: 1};
 let frameKeyframes = [];
+let cropUndoHistory = [];
+let cropSaving = false;
 let selectedFrameKeyframeTime = null;
 let framePositionDirty = false;
 let framePreviewAnimation = null;
@@ -134,7 +136,7 @@ function renderVideos() {
         <div class="video-title-row"><label class="check-wrap"><input type="checkbox" class="video-check" data-path="${esc(v.path)}" ${checked ? 'checked' : ''}><span></span></label><b title="${esc(v.name)}">${esc(v.name)}</b></div>
         <small>${esc(v.folder)} · ${v.size_mb} MB</small>
         <div class="badge-row"><span class="badge ${uploaded ? 'done' : ''}">${uploaded ? 'Uploaded' : 'Pending'}</span>${v.legacy ? '<span class="badge legacy">Legacy</span>' : ''}</div>
-        <div class="video-card-actions"><button type="button" class="frame-button" data-preview-path="${esc(v.path)}">Preview</button><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust frame' : 'Regenerate to edit'}</button>${String(v.framing_mode || '').startsWith('manual') ? `<span class="badge done">${v.framing_mode === 'manual_keyframes' ? 'Keyframed' : 'Manual frame'}</span>` : ''}</div>
+        <div class="video-card-actions"><button type="button" class="frame-button" data-preview-path="${esc(v.path)}">Preview</button><button type="button" class="frame-button" data-caption-path="${esc(v.path)}" ${v.caption_editable ? '' : 'disabled'} title="${v.caption_editable ? 'Edit caption text and timing' : 'Save the crop again or regenerate to enable captions'}">Captions</button><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust frame' : 'Regenerate to edit'}</button>${String(v.framing_mode || '').startsWith('manual') ? `<span class="badge done">${v.framing_mode === 'manual_keyframes' ? 'Keyframed' : 'Manual frame'}</span>` : ''}</div>
       </div>
     </article>`;
   }).join('') || emptyState('01', 'No Shorts in this queue', 'Generate a source video to create your first reviewable clips.');
@@ -172,7 +174,7 @@ function renderTable() {
       <div>${esc(owner)}</div>
       <div><span class="badge ${uploaded ? 'done' : ''}">${uploaded ? 'Uploaded' : 'Pending'}</span><span>${esc(v.modified)}</span></div>
       <div>${v.size_mb} MB</div>
-      <div class="row-actions"><button type="button" class="frame-button" data-preview-path="${esc(v.path)}">Preview</button><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust' : 'No master'}</button></div>
+      <div class="row-actions"><button type="button" class="frame-button" data-preview-path="${esc(v.path)}">Preview</button><button type="button" class="frame-button" data-caption-path="${esc(v.path)}" ${v.caption_editable ? '' : 'disabled'} title="${v.caption_editable ? 'Edit caption text and timing' : 'Save the crop again or regenerate to enable captions'}">Captions</button><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust' : 'No master'}</button></div>
     </div>`;
   }).join('') || emptyState('03', 'No matching Shorts', 'Try another search, account, or upload status filter.');
 }
@@ -465,11 +467,15 @@ function showFrameState(message, error = false) {
 async function openFrameEditor(path) {
   const dialog = $('frameDialog');
   activeFramePath = path;
+  $('frameSourceVideo').pause();
+  cropUndoHistory = [];
+  $('saveFrameBtn').disabled = true;
   showFrameState('Loading the retained full-frame clip…');
   if (!dialog.open) dialog.showModal();
   try {
     const r = await fetch('/api/frame-info?path=' + encodeURIComponent(path) + '&_=' + Date.now(), {cache: 'no-store'});
     const data = await r.json();
+    if (activeFramePath !== path || !dialog.open) return;
     if (!r.ok) throw new Error(data.error || 'Could not open the framing editor.');
     const framing = data.framing || {};
     const isManual = String(framing.mode || '').startsWith('manual');
@@ -490,9 +496,10 @@ async function openFrameEditor(path) {
     $('frameSourceVideo').src = '/media?path=' + encodeURIComponent(data.source_master_path) + '&_=' + Date.now();
     $('frameResultVideo').src = '/media?path=' + encodeURIComponent(data.video_path) + '&_=' + Date.now();
     renderFrameKeyframes();
+    $('saveFrameBtn').disabled = false;
     showFrameState(framing.mode === 'auto_face_tracking'
-      ? 'Automatic face tracking is loaded. Add crop keyframes to override it with your manual sequence.'
-      : `${frameKeyframes.length} manual crop keyframe${frameKeyframes.length === 1 ? '' : 's'} loaded.`);
+      ? 'This manual preview starts centered. Saving replaces automatic tracking with your crop points.'
+      : `${frameKeyframes.length} crop point${frameKeyframes.length === 1 ? '' : 's'} loaded.`);
   } catch (e) {
     showFrameState(e.message, true);
     $('saveFrameBtn').disabled = true;
@@ -500,6 +507,7 @@ async function openFrameEditor(path) {
 }
 
 function closeFrameEditor() {
+  if (cropSaving) return showFrameState('Finishing your render. Please wait before closing.');
   const source = $('frameSourceVideo');
   source.pause();
   source.removeAttribute('src');
@@ -559,9 +567,18 @@ function formatFrameTime(time) {
 function renderFrameKeyframes() {
   $('keyframeList').innerHTML = frameKeyframes.map((frame, index) => {
     const active = selectedFrameKeyframeTime !== null && Math.abs(frame.time - selectedFrameKeyframeTime) < 0.002;
-    return `<button type="button" class="keyframe-chip ${active ? 'active' : ''}" data-keyframe-time="${frame.time}" title="Crop keyframe ${index + 1}"><span>${index + 1}</span>${formatFrameTime(frame.time)}</button>`;
+    return `<button type="button" class="keyframe-chip ${active ? 'active' : ''}" data-keyframe-time="${frame.time}" aria-pressed="${active}" title="Go to crop point ${index + 1}"><span>${index + 1}</span>${frame.time === 0 ? 'Start' : formatFrameTime(frame.time)}</button>`;
   }).join('');
-  $('deleteKeyframeBtn').disabled = frameKeyframes.length <= 1 || selectedFrameKeyframeTime === null;
+  $('deleteKeyframeBtn').disabled = frameKeyframes.length <= 1 || selectedFrameKeyframeTime === null || selectedFrameKeyframeTime === 0;
+  $('undoCropBtn').disabled = !cropUndoHistory.length;
+  const time = $('frameSourceVideo').currentTime || 0;
+  $('previousCropBtn').disabled = !frameKeyframes.some(frame => frame.time < time - 0.06);
+  $('nextCropBtn').disabled = !frameKeyframes.some(frame => frame.time > time + 0.06);
+  $('setKeyframeBtn').disabled = selectedFrameKeyframeTime !== null;
+  $('setKeyframeBtn').textContent = selectedFrameKeyframeTime !== null ? 'Crop point at this time' : 'Add crop point here';
+  $('cropPointHint').textContent = frameKeyframes.length === 1
+    ? 'One point: the crop stays still. Seek and adjust to add movement.'
+    : `${frameKeyframes.length} crop points. Drag to adjust; changes are kept until you save.`;
 }
 
 function showFrameAt(time, {selectExact = false} = {}) {
@@ -580,23 +597,27 @@ function showFrameAt(time, {selectExact = false} = {}) {
   updateFrameOverlay();
 }
 
-function setCurrentKeyframe({quiet = false} = {}) {
+function setCurrentKeyframe({quiet = false, pause = true} = {}) {
   const video = $('frameSourceVideo');
-  video.pause();
+  if (pause) video.pause();
+  const before = JSON.stringify(frameKeyframes);
   const time = Number((video.currentTime || 0).toFixed(3));
   const frame = {...framePosition, time};
   const existing = frameKeyframes.findIndex(item => Math.abs(item.time - time) < 0.06);
-  if (existing >= 0) frameKeyframes[existing] = frame;
+  if (existing < 0 && frameKeyframes.length >= 100) { showFrameState('Limit reached: remove a crop point before adding another.', true); return; }
+  if (existing >= 0) { frame.time = frameKeyframes[existing].time; frameKeyframes[existing] = frame; }
   else frameKeyframes.push(frame);
   frameKeyframes = normalizeFrameKeyframes(frameKeyframes);
-  selectedFrameKeyframeTime = time;
+  if (JSON.stringify(frameKeyframes) !== before) { cropUndoHistory.push(before); cropUndoHistory = cropUndoHistory.slice(-30); }
+  selectedFrameKeyframeTime = frame.time;
   framePositionDirty = false;
   renderFrameKeyframes();
-  if (!quiet) showFrameState(`Keyframe saved at ${formatFrameTime(time)}. Add another where the subject moves.`);
+  if (!quiet) showFrameState(`Crop point added at ${formatFrameTime(time)}. Save crop when you’re finished.`);
 }
 
 function deleteCurrentKeyframe() {
-  if (frameKeyframes.length <= 1 || selectedFrameKeyframeTime === null) return;
+  if (frameKeyframes.length <= 1 || selectedFrameKeyframeTime === null || selectedFrameKeyframeTime === 0) return;
+  cropUndoHistory.push(JSON.stringify(frameKeyframes));
   const removedTime = selectedFrameKeyframeTime;
   frameKeyframes = frameKeyframes.filter(frame => Math.abs(frame.time - removedTime) >= 0.002);
   const nearest = frameKeyframes.reduce((best, frame) => Math.abs(frame.time - removedTime) < Math.abs(best.time - removedTime) ? frame : best);
@@ -604,7 +625,7 @@ function deleteCurrentKeyframe() {
   $('frameSourceVideo').currentTime = nearest.time;
   showFrameAt(nearest.time);
   renderFrameKeyframes();
-  showFrameState(`Removed the keyframe at ${formatFrameTime(removedTime)}.`);
+  showFrameState(`Removed the crop point at ${formatFrameTime(removedTime)}.`);
 }
 
 function frameCropFractions() {
@@ -666,7 +687,10 @@ function runFramePreview() {
 }
 
 async function saveManualFrame() {
-  if (!activeFramePath) return;
+  if (!activeFramePath || cropSaving) return;
+  $('frameSourceVideo').pause();
+  cropSaving = true;
+  document.querySelector('.frame-workspace').inert = true;
   if (framePositionDirty) setCurrentKeyframe({quiet: true});
   setBusy($('saveFrameBtn'), true, 'Rendering…');
   showFrameState(`Re-rendering the Short with ${frameKeyframes.length} crop keyframe${frameKeyframes.length === 1 ? '' : 's'}.`);
@@ -694,7 +718,9 @@ async function saveManualFrame() {
   } catch (e) {
     showFrameState(e.message, true);
   } finally {
-    setBusy($('saveFrameBtn'), false, 'Save and re-render');
+    cropSaving = false;
+    document.querySelector('.frame-workspace').inert = false;
+    setBusy($('saveFrameBtn'), false, 'Save crop');
   }
 }
 
@@ -878,6 +904,7 @@ function nav(section) {
     x.setAttribute('aria-current', active ? 'page' : 'false');
   });
   const pages = {
+    storage: ['Storage', 'Inspect disk usage and clean up old editing files.'],
     settings: ['Accounts', 'Manage publishing destinations and connection status.'],
     generate: ['Generate', 'Create a new batch of Shorts from a YouTube source.'],
     activity: ['Activity', 'Follow live processing output and inspect earlier jobs.'],
@@ -887,6 +914,7 @@ function nav(section) {
   const page = pages[section] || pages.dashboard;
   $('pageTitle').textContent = page[0];
   $('pageSubtitle').textContent = page[1];
+  if (section === 'storage') scanStorage();
 }
 
 function toast(message) {
@@ -900,10 +928,23 @@ function JSONSafe(v) { try { return JSON.parse(v); } catch { return null; } }
 JSON.parseSafe = JSONSafe;
 
 function bindEvents() {
+  $('storageScan').addEventListener('click', scanStorage);
+  $('storageAge').addEventListener('change', scanStorage);
+  $('storageFiles').addEventListener('change', updateStorageSelection);
+  $('storageSelectAll').addEventListener('click', () => {
+    document.querySelectorAll('[data-storage-index]').forEach(input => { input.checked = true; });
+    updateStorageSelection();
+  });
+  $('storageClear').addEventListener('click', () => {
+    document.querySelectorAll('[data-storage-index]').forEach(input => { input.checked = false; });
+    updateStorageSelection();
+  });
+  $('storageDelete').addEventListener('click', deleteStorageFiles);
   document.querySelectorAll('.nav').forEach(btn => btn.addEventListener('click', () => nav(btn.dataset.section)));
   $('refreshBtn').addEventListener('click', async () => {
     setBusy($('refreshBtn'), true, 'Refreshing…');
     await loadState();
+    if (currentSection === 'storage') await scanStorage();
     setBusy($('refreshBtn'), false, 'Refresh');
   });
   $('platform').addEventListener('change', () => { selected.clear(); renderAccountSelects(); renderUploadAccounts(); renderVideos(); updateCount(); });
@@ -953,9 +994,21 @@ function bindEvents() {
   });
   $('frameSourceVideo').addEventListener('seeked', () => showFrameAt($('frameSourceVideo').currentTime, {selectExact: true}));
   $('frameSourceVideo').addEventListener('play', () => {
+    if (framePositionDirty) setCurrentKeyframe({quiet: true, pause: false});
+    $('previewCropBtn').textContent = 'Pause preview';
     selectedFrameKeyframeTime = null;
     framePositionDirty = false;
     renderFrameKeyframes();
+  });
+  $('frameSourceVideo').addEventListener('pause', () => { $('previewCropBtn').textContent = 'Play preview'; });
+  $('frameZoom').addEventListener('change', () => { if (framePositionDirty) setCurrentKeyframe({quiet: true}); });
+  $('cropOverlay').addEventListener('pointercancel', () => { if (framePositionDirty) setCurrentKeyframe({quiet: true}); });
+  $('undoCropBtn').addEventListener('click', undoCropChange);
+  $('previousCropBtn').addEventListener('click', () => jumpCropPoint(-1));
+  $('nextCropBtn').addEventListener('click', () => jumpCropPoint(1));
+  $('previewCropBtn').addEventListener('click', () => {
+    const video = $('frameSourceVideo');
+    if (video.paused) video.play().catch(error => showFrameState(error.message, true)); else video.pause();
   });
   $('frameTimeline').addEventListener('input', e => {
     const video = $('frameSourceVideo');
@@ -982,6 +1035,7 @@ function bindEvents() {
     framePosition.centerX = preset === 'left' ? 0 : (preset === 'right' ? 1 : 0.5);
     framePositionDirty = true;
     updateFrameOverlay();
+    setCurrentKeyframe({quiet: true});
   }));
   $('frameZoom').addEventListener('input', e => {
     $('frameSourceVideo').pause();
@@ -997,6 +1051,7 @@ function bindEvents() {
     framePositionDirty = true;
     $('frameZoom').value = '1';
     updateFrameOverlay();
+    setCurrentKeyframe({quiet: true});
   });
   let dragOffset = null;
   $('cropOverlay').addEventListener('pointerdown', e => {
@@ -1014,6 +1069,7 @@ function bindEvents() {
     updateFrameOverlay();
   });
   $('cropOverlay').addEventListener('pointerup', e => {
+    if (framePositionDirty) setCurrentKeyframe({quiet: true});
     dragOffset = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
   });
@@ -1025,8 +1081,10 @@ function bindEvents() {
     else if (e.key === 'ArrowDown') framePosition.centerY += step;
     else return;
     e.preventDefault();
+    $('frameSourceVideo').pause();
     framePositionDirty = true;
     updateFrameOverlay();
+    setCurrentKeyframe({quiet: true});
   });
   window.addEventListener('resize', updateFrameOverlay);
   window.addEventListener('offline', () => updateSyncState(false));
@@ -1044,6 +1102,7 @@ function bindEvents() {
   $('generateBtn').addEventListener('click', () => generateFrom('generateUrl', 'generateAccount', $('generateBtn'), 'generateStatus'));
   $('generateFullBtn').addEventListener('click', () => generateFrom('generateUrlFull', 'generateAccountFull', $('generateFullBtn'), 'generateStatus'));
   $('videoGrid').addEventListener('click', e => {
+    if (e.target.closest('[data-caption-path]')) return;
     const previewButton = e.target.closest('[data-preview-path]');
     if (previewButton) {
       e.stopPropagation();
@@ -1082,3 +1141,95 @@ bindEvents();
 loadState();
 technicalTimer = setInterval(updateTechnicalProgress, 1200);
 setInterval(loadState, 3000);
+
+let storageCandidates = [];
+let storageScanVersion = 0;
+let storageDays = 30;
+let storageDeleting = false;
+
+function storageSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+  let value = bytes / 1024, index = 0;
+  while (value >= 1024 && index < units.length - 1) { value /= 1024; index++; }
+  return `${value.toFixed(1)} ${units[index]}`;
+}
+
+function chosenStorageFiles() {
+  return [...document.querySelectorAll('[data-storage-index]:checked')]
+    .map(input => storageCandidates[Number(input.dataset.storageIndex)]).filter(Boolean);
+}
+
+function updateStorageSelection() {
+  const files = chosenStorageFiles();
+  $('storageSelection').textContent = `${files.length} selected · ${storageSize(files.reduce((sum, item) => sum + item.bytes, 0))}`;
+  $('storageDelete').disabled = storageDeleting || files.length === 0;
+}
+
+async function scanStorage() {
+  if (storageDeleting) return;
+  const version = ++storageScanVersion;
+  const days = Number($('storageAge').value);
+  storageCandidates = [];
+  $('storageFiles').replaceChildren();
+  updateStorageSelection();
+  $('storageStatus').textContent = 'Scanning storage…';
+  try {
+    const response = await fetch(`/api/storage?days=${days}`, {cache: 'no-store'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Storage scan failed.');
+    if (version !== storageScanVersion) return;
+    storageDays = days;
+    storageCandidates = data.candidates;
+    $('storageUsage').innerHTML = Object.entries(data.groups).map(([name, group]) =>
+      `<article class="stat"><span>${esc(name)}</span><strong>${storageSize(group.bytes)}</strong><small>${group.files} files</small></article>`).join('');
+    $('storageStatus').textContent = `${storageSize(data.disk.free)} free on disk. ${data.candidates.length} files eligible for cleanup.${data.errors.length ? ' Some files could not be scanned.' : ''}`;
+    $('storageFiles').innerHTML = data.candidates.map((item, index) =>
+      `<label class="storage-file"><input type="checkbox" data-storage-index="${index}"><span><b>${item.category === 'masters' ? 'Editing copy' : 'Render scratch'}</b><small>${esc(item.path)}</small></span><span>${storageSize(item.bytes)}</span></label>`).join('') || '<p class="hint">No eligible files for this age filter.</p>';
+    updateStorageSelection();
+  } catch (error) {
+    if (version === storageScanVersion) $('storageStatus').textContent = error.message;
+  }
+}
+
+async function deleteStorageFiles() {
+  const files = chosenStorageFiles();
+  if (!files.length || storageDeleting) return;
+  const total = storageSize(files.reduce((sum, item) => sum + item.bytes, 0));
+  const masters = files.filter(item => item.category === 'masters').length;
+  if (!confirm(`Permanently delete ${files.length} files (${total})?${masters ? ` Removing ${masters} editing copies may disable crop or caption editing until regenerated.` : ''} Finished Shorts and upload history will be kept.`)) return;
+  storageDeleting = true;
+  updateStorageSelection();
+  $('storageStatus').textContent = 'Deleting selected files…';
+  try {
+    const data = await postJson('/api/storage/cleanup', {files, days: storageDays});
+    storageDeleting = false;
+    await scanStorage();
+    $('storageStatus').textContent = `Deleted ${data.deleted.length} files and reclaimed ${storageSize(data.freed_bytes)}.${data.errors.length ? ' Could not delete: ' + data.errors.map(item => item.path + ': ' + item.error).join('; ') : ''}`;
+    await loadState();
+  } catch (error) {
+    $('storageStatus').textContent = error.message;
+  } finally {
+    storageDeleting = false;
+    updateStorageSelection();
+  }
+}
+
+function jumpCropPoint(direction) {
+  const video = $('frameSourceVideo');
+  const time = video.currentTime || 0;
+  const points = frameKeyframes.filter(frame => direction < 0 ? frame.time < time - 0.06 : frame.time > time + 0.06);
+  const point = direction < 0 ? points.at(-1) : points[0];
+  if (!point) return;
+  video.pause();
+  video.currentTime = point.time;
+  showFrameAt(point.time, {selectExact: true});
+}
+
+function undoCropChange() {
+  if (!cropUndoHistory.length) return;
+  $('frameSourceVideo').pause();
+  frameKeyframes = JSON.parse(cropUndoHistory.pop());
+  showFrameAt($('frameSourceVideo').currentTime, {selectExact: true});
+  showFrameState('Last crop change undone.');
+}

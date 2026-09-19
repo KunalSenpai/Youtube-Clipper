@@ -20,6 +20,7 @@
       <button type="button" class="nav" data-section="videos"><span class="nav-icon">03</span><span>Library</span></button>
       <button type="button" class="nav" data-section="activity"><span class="nav-icon">04</span><span>Activity</span></button>
       <button type="button" class="nav" data-section="settings"><span class="nav-icon">05</span><span>Accounts</span></button>
+      <button type="button" class="nav" data-section="storage"><span class="nav-icon">06</span><span>Storage</span></button>
     </nav>
     <div class="side-note"><span class="live-dot"></span><div><b>Private connection</b><span>Tailscale / localhost</span></div></div>
   </aside>
@@ -123,6 +124,22 @@
       </div>
     </section>
 
+    <section id="storage" class="section">
+      <div class="panel">
+        <div class="panel-head"><div><span class="section-kicker">Disk management</span><h2>Storage cleanup</h2><p>Keep finished Shorts and publishing history while reclaiming space from old editing files.</p></div><span class="panel-index">06</span></div>
+        <div id="storageUsage" class="stats"></div>
+        <div class="controls">
+          <label>Files last modified<select id="storageAge"><option value="30">Over 30 days ago</option><option value="7">Over 7 days ago</option><option value="90">Over 90 days ago</option><option value="0">Any time</option></select></label>
+          <button type="button" class="refresh" id="storageScan">Scan storage</button>
+        </div>
+        <p class="hint">Deleting an editing copy may disable crop or caption editing until you regenerate it. Finished Shorts, captions, transcripts, downloads, and upload history are preserved. Stop command-line processing before cleanup.</p>
+        <div id="storageStatus" class="hint" role="status" aria-live="polite">Scan storage to preview eligible files.</div>
+        <div class="selection-bar"><button type="button" class="text-btn" id="storageSelectAll">Select all listed</button><button type="button" class="text-btn" id="storageClear">Clear selection</button><span id="storageSelection">0 selected</span></div>
+        <div id="storageFiles" class="storage-files"></div>
+        <div class="action-row"><button type="button" class="danger" id="storageDelete" disabled>Delete selected files</button></div>
+      </div>
+    </section>
+
     <section id="settings" class="section">
       <div class="panel">
         <div class="panel-head"><div><span class="section-kicker">Destinations</span><h2>Connected accounts</h2><p>Account credentials stay on the server and are never sent to the browser.</p></div><span class="panel-index">05</span></div>
@@ -179,21 +196,21 @@
     <div class="review-header">
       <div>
         <h2 id="frameTitle">Adjust Short framing</h2>
-        <p>Place crop keyframes along the timeline, then move left, center, or right as the scene changes.</p>
+        <p>Drag the crop to frame your subject. Move to another time and adjust it to add movement.</p>
       </div>
       <button type="button" class="icon-button" id="closeFrameBtn" aria-label="Close framing editor">Close</button>
     </div>
     <div id="frameState" class="review-state" role="status" aria-live="polite"></div>
     <div class="frame-workspace">
       <section class="frame-source-column">
-        <div class="frame-label"><b>Full source frame</b><span>Drag the outlined area</span></div>
+        <div class="frame-label"><b>1. Position your crop</b><span>Drag the box or use the presets</span></div>
         <div class="frame-stage" id="frameStage">
           <video id="frameSourceVideo" controls muted loop playsinline preload="metadata"></video>
           <div id="cropOverlay" class="crop-overlay" tabindex="0" aria-label="Draggable 9 by 16 crop area"><span>9:16</span></div>
         </div>
       </section>
       <section class="frame-preview-column">
-        <div class="frame-label"><b>Live crop preview</b><span>Captions appear after saving</span></div>
+        <div class="frame-label"><b>Your Short</b><span>Live preview</span></div>
         <canvas id="frameCanvas" width="270" height="480"></canvas>
       </section>
       <aside class="frame-controls">
@@ -205,33 +222,48 @@
         <label>Zoom <output id="frameZoomValue">1.00×</output>
           <input id="frameZoom" type="range" min="1" max="3" step="0.01" value="1">
         </label>
-        <p>Move the box and set a keyframe wherever the subject changes position. The crop moves smoothly between keyframes.</p>
-        <button type="button" class="text-btn" id="centerFrameBtn">Reset current frame</button>
+        <p>Adjustments are added to the timeline automatically. One crop point holds still; multiple points create smooth movement.</p>
+        <button type="button" class="text-btn" id="centerFrameBtn">Center and reset zoom</button>
         <div class="keyframe-editor">
-          <div class="keyframe-heading"><b>Crop timeline</b><output id="frameTimeValue">00:00.00</output></div>
+          <div class="keyframe-heading"><b>2. Add movement</b><output id="frameTimeValue">00:00.00</output></div>
           <input id="frameTimeline" type="range" min="0" max="1" step="0.05" value="0" aria-label="Framing timeline">
+          <div class="crop-playback"><button type="button" class="frame-button" id="previousCropBtn" aria-label="Previous crop point">Previous</button><button type="button" class="frame-button" id="previewCropBtn">Play preview</button><button type="button" class="frame-button" id="nextCropBtn" aria-label="Next crop point">Next</button></div>
+          <p id="cropPointHint" role="status" aria-live="polite">Move the playhead, then drag the crop.</p>
           <div class="keyframe-actions">
-            <button type="button" class="primary" id="setKeyframeBtn">Set keyframe</button>
-            <button type="button" class="danger" id="deleteKeyframeBtn" disabled>Delete</button>
+            <button type="button" class="primary" id="setKeyframeBtn">Add crop point here</button>
+            <button type="button" class="danger" id="deleteKeyframeBtn" disabled>Remove point</button>
           </div>
-          <div id="keyframeList" class="keyframe-list" aria-label="Saved crop keyframes"></div>
+          <div id="keyframeList" class="keyframe-list" aria-label="Crop points"></div>
         </div>
-        <div class="frame-current">
-          <b>Saved Short</b>
+        <button type="button" class="text-btn" id="undoCropBtn" disabled>Undo last change</button>
+        <details class="frame-current">
+          <summary>Compare with saved Short</summary>
           <video id="frameResultVideo" controls playsinline preload="metadata"></video>
-        </div>
+        </details>
       </aside>
     </div>
     <div class="review-footer">
-      <p>The full-frame master is retained. Every keyframe can be revised later.</p>
+      <p>Changes stay in this editor until you save. Saving creates the updated Short.</p>
       <div class="review-actions">
         <button type="button" class="text-btn" id="cancelFrameBtn">Cancel</button>
-        <button type="button" class="primary" id="saveFrameBtn">Save and re-render</button>
+        <button type="button" class="primary" id="saveFrameBtn">Save crop</button>
       </div>
     </div>
   </div>
 </dialog>
+<dialog id="captionDialog" class="review-dialog" aria-labelledby="captionTitle">
+  <div class="review-shell">
+    <div class="review-header"><div><h2 id="captionTitle">Edit captions</h2><p>Correct the words and timing, then save the updated Short.</p></div><button type="button" class="icon-button" id="closeCaptions">Close</button></div>
+    <div id="captionStatus" class="review-state show" role="status" aria-live="polite"></div>
+    <div class="caption-workspace" id="captionWorkspace">
+      <section class="caption-preview"><div class="caption-player"><video id="captionVideo" controls playsinline preload="metadata"></video><div id="captionOverlay" aria-hidden="true"></div></div><p class="hint">Text preview uses the clean video. Saving applies the existing caption style. Edited lines use steady text instead of word highlighting.</p></section>
+      <section class="caption-edit"><div class="caption-list" id="captionRows"></div><button type="button" class="text-btn" id="addCaption">Add line at playhead</button></section>
+    </div>
+    <div class="review-footer"><p>Updates this local Short and future subtitle uploads. Videos already on YouTube are unchanged.</p><button type="button" class="primary" id="saveCaptions" disabled>Save captions</button></div>
+  </div>
+</dialog>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script src="/app.js?v=8"></script>
+<script src="/app.js?v=9"></script>
+<script src="/captions.js?v=1"></script>
 </body>
 </html>
