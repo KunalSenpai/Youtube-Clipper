@@ -2,6 +2,7 @@ let state = {videos: [], accounts: [], jobs: [], stats: {}};
 let selected = new Set();
 let currentSection = 'dashboard';
 let technicalJobId = null;
+let latestKnownJobId = null;
 let technicalTimer = null;
 let technicalRequestInFlight = false;
 let activeReviewJobId = null;
@@ -144,10 +145,16 @@ function renderTechnicalJobOptions(jobs) {
   const select = $('techJobSelect');
   if (!select) return;
   const ordered = [...jobs].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
-  if (!technicalJobId || !ordered.some(j => j.id === technicalJobId)) {
-    const active = ordered.find(j => j.status === 'running' || j.status === 'queued');
-    technicalJobId = active ? active.id : (ordered[0]?.id || null);
+  const newestJobId = ordered[0]?.id || null;
+
+  // Automatically follow a job that arrived after the last state refresh.
+  // If the user deliberately selects an older job, preserve that selection
+  // until another new job is created.
+  if (newestJobId !== latestKnownJobId) technicalJobId = newestJobId;
+  if (technicalJobId && !ordered.some(j => j.id === technicalJobId)) {
+    technicalJobId = newestJobId;
   }
+  latestKnownJobId = newestJobId;
   select.innerHTML = ordered.length
     ? ordered.map(j => {
         const type = j.job_type === 'generate' ? 'Generate' : (j.job_type === 'prepare' ? 'Prepare review' : 'Upload');
