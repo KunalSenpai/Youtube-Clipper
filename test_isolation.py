@@ -195,6 +195,34 @@ check("API payload preserves private scheduling", scheduled_body["status"] == {
 })
 
 
+# ------------------------------------------------------------------
+# TEST 6: manual framing geometry
+# ------------------------------------------------------------------
+print("\n=== TEST 6: Manual framing geometry ===")
+from reframe_short import crop_geometry
+
+check(
+    "Landscape zoom 1 keeps the complete source height",
+    crop_geometry(1920, 1080, 0.5, 0.5, 1.0) == (656, 0, 608, 1080),
+)
+check(
+    "Landscape crop is clamped at the left edge",
+    crop_geometry(1920, 1080, 0.0, 0.5, 1.0) == (0, 0, 608, 1080),
+)
+check(
+    "A native 9:16 source remains completely visible at zoom 1",
+    crop_geometry(1080, 1920, 0.5, 0.5, 1.0) == (0, 0, 1080, 1920),
+)
+zoomed = crop_geometry(1920, 1080, 0.5, 0.5, 2.0)
+check("Zoom 2 halves both crop dimensions", zoomed[2:] == (304, 540))
+try:
+    crop_geometry(1920, 1080, "nan", 0.5, 1.0)
+    rejected_invalid_framing = False
+except ValueError:
+    rejected_invalid_framing = True
+check("Invalid framing values are rejected", rejected_invalid_framing)
+
+
 print()
 print("=" * 60)
 if FAILED:

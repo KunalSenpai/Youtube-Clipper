@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import config as bot_config
+from reframe_short import reframe_short as apply_manual_framing
 
 ROOT = bot_config.PROJECT_ROOT
 OUTPUT = bot_config.OUTPUT_DIR
@@ -47,6 +48,7 @@ APPJS = DASHBOARD_DIR / "app.js"
 PROCESS_LOCK = threading.RLock()
 ACTIVE_PROCESSES: dict[str, subprocess.Popen] = {}
 CANCELLED_JOBS: set[str] = set()
+ACTIVE_REFRAMES: set[str] = set()
 
 
 def utc_now():
@@ -123,7 +125,11 @@ def content_account_id(path: Path):
 
 def all_videos(account_id=None):
     rows = []
-    for path in sorted(OUTPUT.rglob("short_*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True):
+    rendered = [
+        path for path in OUTPUT.rglob("short_*.mp4")
+        if re.fullmatch(r"short_\d+\.mp4", path.name, re.I)
+    ]
+    for path in sorted(rendered, key=lambda p: p.stat().st_mtime, reverse=True):
         owner = content_account_id(path)
         if account_id and owner not in {account_id, None}:
             continue
@@ -132,6 +138,8 @@ def all_videos(account_id=None):
             folder = str(path.parent.relative_to(OUTPUT))
         except ValueError:
             folder = path.parent.name
+        manifest = load_short_manifest(path)
+        source_master = safe_media_file(manifest.get("source_master_file", "")) if manifest else None
         rows.append({
             "path": str(path.resolve()),
             "name": path.name,
@@ -140,6 +148,8 @@ def all_videos(account_id=None):
             "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
             "content_account_id": owner,
             "legacy": owner is None,
+            "frame_editable": bool(source_master),
+            "framing_mode": (manifest.get("framing") or {}).get("mode") if manifest else None,
         })
     return rows
 
@@ -355,13 +365,22 @@ def delete_shorts(paths):
     for p in valid:
         try:
             manifest=p.with_suffix(".manifest.json")
+            derivative_files=[]
             if manifest.exists():
                 try:
                     data=json.loads(manifest.read_text(encoding="utf-8"))
                     cid=str(data.get("clip_id") or data.get("clip",{}).get("clip_id") or "")
                     if cid: clip_ids.add(cid)
+                    for key in ("source_master_file", "caption_file"):
+                        raw_derivative=data.get(key)
+                        if raw_derivative:
+                            derivative=Path(raw_derivative).resolve()
+                            derivative.relative_to(ROOT.resolve())
+                            derivative_files.append(derivative)
                 except Exception: pass
             p.unlink(missing_ok=True)
+            for derivative in derivative_files:
+                derivative.unlink(missing_ok=True)
             if manifest.exists(): manifest.unlink(missing_ok=True)
             deleted.append(str(p))
         except Exception as exc: errors.append({"path":str(p),"error":str(exc)})
@@ -426,11 +445,55 @@ def safe_output_file(raw_path):
     try:
         path = Path(raw_path).resolve()
         path.relative_to(OUTPUT.resolve())
+        if (
+            path.is_file()
+            and path.suffix.lower() == ".mp4"
+            and re.fullmatch(r"short_\d+\.mp4", path.name, re.I)
+        ):
+            return path
+    except Exception:
+        pass
+    return None
+
+
+def safe_media_file(raw_path):
+    """Allow final Shorts and their retained source masters to be streamed."""
+    try:
+        path = Path(raw_path).resolve()
+        path.relative_to(OUTPUT.resolve())
         if path.is_file() and path.suffix.lower() == ".mp4":
             return path
     except Exception:
         pass
     return None
+
+
+def load_short_manifest(video_path):
+    try:
+        path = Path(video_path).with_suffix(".manifest.json")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def framing_info(raw_path):
+    video = safe_output_file(raw_path)
+    if not video:
+        raise ValueError("The selected Short is no longer available.")
+    manifest = load_short_manifest(video)
+    if not manifest:
+        raise ValueError("This Short has no editing manifest. Regenerate it first.")
+    source_master = safe_media_file(manifest.get("source_master_file", ""))
+    if not source_master:
+        raise ValueError("This Short predates the framing editor. Regenerate it first.")
+    return {
+        "video_path": str(video),
+        "source_master_path": str(source_master),
+        "framing": manifest.get("framing") or {
+            "mode": "auto_face_tracking", "center_x": 0.5, "center_y": 0.5, "zoom": 1.0,
+        },
+    }
 
 
 def safe_report_file(raw_path):
@@ -615,24 +678,20 @@ class Handler(BaseHTTPRequestHandler):
                 )
             return json_response(self, {"ready": True, "job": row, "report": row["report"]})
 
+        if parsed.path == "/api/frame-info":
+            raw = parse_qs(parsed.query).get("path", [""])[0]
+            try:
+                return json_response(self, {"ok": True, **framing_info(raw)})
+            except ValueError as exc:
+                return json_response(self, {"error": str(exc)}, 404)
+
         if parsed.path == "/media":
             raw = parse_qs(parsed.query).get("path", [""])[0]
-            path = safe_output_file(raw)
+            path = safe_media_file(raw)
             if not path:
                 self.send_error(404)
                 return
-            data = path.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "video/mp4")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            try:
-                self.wfile.write(data)
-            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
-                pass
-            return
+            return self.serve_media(path)
 
         if parsed.path in {"/", "/index.html"}:
             return self.serve(INDEX, "text/html; charset=utf-8")
@@ -657,11 +716,56 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             pass
 
+    def serve_media(self, path):
+        """Stream MP4 data with byte ranges so large editing masters seek safely."""
+        size = path.stat().st_size
+        start = 0
+        end = max(0, size - 1)
+        status = 200
+        range_header = self.headers.get("Range", "")
+        match = re.match(r"bytes=(\d*)-(\d*)$", range_header)
+        if match:
+            if match.group(1):
+                start = int(match.group(1))
+                if match.group(2):
+                    end = min(end, int(match.group(2)))
+            else:
+                suffix_length = int(match.group(2) or 0)
+                start = max(0, size - suffix_length)
+                end = max(0, size - 1)
+            if start > end or start >= size:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            status = 206
+        length = end - start + 1
+        self.send_response(status)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Length", str(length))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        try:
+            with path.open("rb") as source:
+                source.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = source.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass
+
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path not in {
             "/api/upload", "/api/prepare", "/api/approve",
-            "/api/generate", "/api/stop", "/api/delete",
+            "/api/generate", "/api/stop", "/api/delete", "/api/reframe",
         }:
             self.send_error(404)
             return
@@ -675,6 +779,37 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/delete":
                 result = delete_shorts(body.get("files", []))
                 return json_response(self, {"ok": True, **result})
+            if parsed.path == "/api/reframe":
+                video_path = str(body.get("video_path", ""))
+                video = safe_output_file(video_path)
+                if not video:
+                    return json_response(self, {"error": "The selected Short is invalid."}, 400)
+                resolved_video = str(video.resolve())
+                for job in job_rows():
+                    if job.get("status") not in {"queued", "running"}:
+                        continue
+                    files = JSONSafe(job.get("selected_files") or "[]") or []
+                    if resolved_video in {str(Path(item).resolve()) for item in files}:
+                        return json_response(
+                            self,
+                            {"error": "Wait for the active review or upload job to finish before reframing this Short."},
+                            409,
+                        )
+                with PROCESS_LOCK:
+                    if resolved_video in ACTIVE_REFRAMES:
+                        return json_response(self, {"error": "This Short is already being reframed."}, 409)
+                    ACTIVE_REFRAMES.add(resolved_video)
+                try:
+                    framing = apply_manual_framing(
+                        resolved_video,
+                        body.get("center_x", 0.5),
+                        body.get("center_y", 0.5),
+                        body.get("zoom", 1.0),
+                    )
+                finally:
+                    with PROCESS_LOCK:
+                        ACTIVE_REFRAMES.discard(resolved_video)
+                return json_response(self, {"ok": True, "framing": framing})
 
             account = account_by_id(body.get("account_id"))
             if not account:
@@ -707,7 +842,10 @@ class Handler(BaseHTTPRequestHandler):
                 return json_response(self, {"error": "Select at least one Short."}, 400)
             if platform != account.get("platform"):
                 return json_response(self, {"error": "Platform and account do not match."}, 400)
-            valid_set = {str(p.resolve()) for p in OUTPUT.rglob("short_*.mp4")}
+            valid_set = {
+                str(p.resolve()) for p in OUTPUT.rglob("short_*.mp4")
+                if re.fullmatch(r"short_\d+\.mp4", p.name, re.I)
+            }
             selected = [x for x in selected if x in valid_set]
             if not selected:
                 return json_response(self, {"error": "Selected files are no longer valid output Shorts."}, 400)

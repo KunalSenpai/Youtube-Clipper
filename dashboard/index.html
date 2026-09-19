@@ -136,7 +136,50 @@
     </div>
   </div>
 </dialog>
+<dialog id="frameDialog" class="frame-dialog" aria-labelledby="frameTitle">
+  <div class="frame-shell">
+    <div class="review-header">
+      <div>
+        <h2 id="frameTitle">Adjust Short framing</h2>
+        <p>Drag the portrait box over the full source, then use zoom for a tighter crop.</p>
+      </div>
+      <button type="button" class="icon-button" id="closeFrameBtn" aria-label="Close framing editor">Close</button>
+    </div>
+    <div id="frameState" class="review-state" role="status" aria-live="polite"></div>
+    <div class="frame-workspace">
+      <section class="frame-source-column">
+        <div class="frame-label"><b>Full source frame</b><span>Drag the outlined area</span></div>
+        <div class="frame-stage" id="frameStage">
+          <video id="frameSourceVideo" controls muted loop playsinline preload="metadata"></video>
+          <div id="cropOverlay" class="crop-overlay" tabindex="0" aria-label="Draggable 9 by 16 crop area"><span>9:16</span></div>
+        </div>
+      </section>
+      <section class="frame-preview-column">
+        <div class="frame-label"><b>Live crop preview</b><span>Captions appear after saving</span></div>
+        <canvas id="frameCanvas" width="270" height="480"></canvas>
+      </section>
+      <aside class="frame-controls">
+        <label>Zoom <output id="frameZoomValue">1.00×</output>
+          <input id="frameZoom" type="range" min="1" max="3" step="0.01" value="1">
+        </label>
+        <p>Zoom 1.00 uses the full source height. Move the box sideways to keep the important subject in frame.</p>
+        <button type="button" class="text-btn" id="centerFrameBtn">Center frame</button>
+        <div class="frame-current">
+          <b>Saved Short</b>
+          <video id="frameResultVideo" controls playsinline preload="metadata"></video>
+        </div>
+      </aside>
+    </div>
+    <div class="review-footer">
+      <p>The original full-frame editing master is retained, so you can revise this crop again later.</p>
+      <div class="review-actions">
+        <button type="button" class="text-btn" id="cancelFrameBtn">Cancel</button>
+        <button type="button" class="primary" id="saveFrameBtn">Save and re-render</button>
+      </div>
+    </div>
+  </div>
+</dialog>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script src="/app.js?v=5"></script>
+<script src="/app.js?v=6"></script>
 </body>
 </html>

@@ -1927,15 +1927,26 @@ def render_short(
     # CREATE CROPPED VIDEO
     # --------------------------------------------------------
     temp_video = RENDER_TEMP_DIR / f"cropped_{index}.mp4"
+    # Keep a clean, full-frame copy of the paced clip beside the final Short.
+    # The dashboard framing editor uses this master so manual adjustments are
+    # always made from the original picture instead of re-cropping a 9:16 file.
+    source_master = SOURCE_OUTPUT_DIR / f"short_{index:02d}.source.mp4"
+    source_master_temp = RENDER_TEMP_DIR / f"fullframe_{index}.mp4"
     cap = cv2.VideoCapture(str(video))
     cap.set(cv2.CAP_PROP_POS_MSEC, start * 1000)
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(temp_video), fourcc, fps, (WIDTH, HEIGHT))
+    source_writer = cv2.VideoWriter(
+        str(source_master_temp), fourcc, fps, (source_width, source_height)
+    )
 
-    if not writer.isOpened():
-        print("ERROR: Could not open temporary video writer.")
+    if not writer.isOpened() or not source_writer.isOpened():
+        print("ERROR: Could not open the Short or full-frame video writer.")
         cap.release()
+        writer.release()
+        source_writer.release()
+        source_master_temp.unlink(missing_ok=True)
         return False
 
     crop_width_base = int(source_height * 9 / 16)
@@ -1990,17 +2001,24 @@ def render_short(
         cropped = frame[:, left:left + crop_width]
         cropped = cv2.resize(cropped, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
         writer.write(cropped)
+        if frame.shape[1] != source_width or frame.shape[0] != source_height:
+            frame = cv2.resize(
+                frame, (source_width, source_height), interpolation=cv2.INTER_AREA
+            )
+        source_writer.write(frame)
         written_frames += 1
         frame_number += 1
 
     cap.release()
     writer.release()
+    source_writer.release()
 
     if written_frames == 0:
         print(
             "ERROR: OpenCV could not decode any frames for this Short. "
             "The source codec may not be supported by OpenCV."
         )
+        source_master_temp.unlink(missing_ok=True)
         return False
 
     # --------------------------------------------------------
@@ -2056,6 +2074,33 @@ def render_short(
     if result.returncode != 0:
         print()
         print(f"ERROR rendering Short {index}")
+        source_master_temp.unlink(missing_ok=True)
+        return False
+
+    # Convert OpenCV's editing master to browser-friendly H.264 and attach the
+    # already-synchronized audio from the completed Short. It remains free of
+    # captions and cropping, which makes it safe to reframe repeatedly.
+    master_command = [
+        FFMPEG,
+        "-y",
+        "-i", str(source_master_temp),
+        "-i", str(output_file),
+        "-map", "0:v:0",
+        "-map", "1:a:0?",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "22",
+        "-c:a", "copy",
+        "-shortest",
+        "-movflags", "+faststart",
+        str(source_master),
+    ]
+    master_result = subprocess.run(master_command, cwd=str(PROJECT_DIR))
+    source_master_temp.unlink(missing_ok=True)
+    if master_result.returncode != 0:
+        print(f"ERROR creating full-frame editing master for Short {index}")
+        source_master.unlink(missing_ok=True)
+        output_file.unlink(missing_ok=True)
         return False
 
     print()
@@ -2112,13 +2157,23 @@ for index, clip in enumerate(
         # clip/transcript instead of guessing from the latest run.
         manifest_path = SOURCE_OUTPUT_DIR / f"short_{index:02d}.manifest.json"
         manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "clip_id": clip.get("clip_id", ""),
             "source_id": source_id,
             "run_id": RUN_ID,
             "source_title": clip.get("source_title", ""),
             "source_type": clip.get("source_type", "unknown"),
             "output_file": str(SOURCE_OUTPUT_DIR / f"short_{index:02d}.mp4"),
+            "source_master_file": str(
+                SOURCE_OUTPUT_DIR / f"short_{index:02d}.source.mp4"
+            ),
+            "caption_file": str(RENDER_TEMP_DIR / f"captions_{index}.ass"),
+            "framing": {
+                "mode": "auto_face_tracking",
+                "center_x": 0.5,
+                "center_y": 0.5,
+                "zoom": 1.0,
+            },
             "transcript_file": str(transcript_path),
             "clip": clip,
         }

@@ -41,11 +41,15 @@ are available in the Activity view.
 
 ## Review and publishing
 
-1. Select one or more rendered `short_XX.mp4` files.
-2. Choose **Prepare upload**.
-3. Review or edit the title, description, tags, and visibility.
-4. Confirm the validation result and planned publishing action.
-5. Choose **Approve and upload**.
+1. For a newly rendered Short, choose **Adjust frame** if the automatic
+   face-tracked crop needs correction. Drag the 9:16 outline on the full-frame
+   source, set zoom, and choose **Save and re-render**. The source master is
+   retained for later revisions.
+2. Select one or more rendered `short_XX.mp4` files.
+3. Choose **Prepare upload**.
+4. Review or edit the title, description, tags, and visibility.
+5. Confirm the validation result and planned publishing action.
+6. Choose **Approve and upload**.
 
 The preparation step runs without OAuth or YouTube API calls. Approval stores
 the exact reviewed request, and the uploader stops if its final request differs

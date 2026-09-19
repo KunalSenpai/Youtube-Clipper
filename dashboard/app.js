@@ -9,6 +9,9 @@ let activeReviewJobId = null;
 let activeReviewReport = null;
 let activeReviewAccountId = null;
 let reviewPollTimer = null;
+let activeFramePath = null;
+let framePosition = {centerX: 0.5, centerY: 0.5, zoom: 1};
+let framePreviewAnimation = null;
 
 const $ = id => document.getElementById(id);
 
@@ -106,6 +109,7 @@ function renderVideos() {
         <div class="video-title-row"><label class="check-wrap"><input type="checkbox" class="video-check" data-path="${esc(v.path)}" ${checked ? 'checked' : ''}><span></span></label><b title="${esc(v.name)}">${esc(v.name)}</b></div>
         <small>${esc(v.folder)} · ${v.size_mb} MB</small>
         <div class="badge-row"><span class="badge ${uploaded ? 'done' : ''}">${uploaded ? 'Uploaded' : 'Pending'}</span>${v.legacy ? '<span class="badge legacy">Legacy</span>' : ''}</div>
+        <div class="video-card-actions"><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust frame' : 'Regenerate to edit'}</button>${v.framing_mode === 'manual' ? '<span class="badge done">Manual frame</span>' : ''}</div>
       </div>
     </article>`;
   }).join('') || '<div class="empty">No rendered Shorts for this account yet. Generate some from the Generate Shorts page.</div>';
@@ -332,6 +336,124 @@ async function prepareUpload() {
   }
 }
 
+function showFrameState(message, error = false) {
+  const el = $('frameState');
+  el.textContent = message;
+  el.classList.toggle('show', Boolean(message));
+  el.classList.toggle('error', error);
+}
+
+async function openFrameEditor(path) {
+  const dialog = $('frameDialog');
+  activeFramePath = path;
+  showFrameState('Loading the retained full-frame clip…');
+  if (!dialog.open) dialog.showModal();
+  try {
+    const r = await fetch('/api/frame-info?path=' + encodeURIComponent(path) + '&_=' + Date.now(), {cache: 'no-store'});
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Could not open the framing editor.');
+    const framing = data.framing || {};
+    framePosition = {
+      centerX: framing.mode === 'manual' ? Number(framing.center_x ?? 0.5) : 0.5,
+      centerY: framing.mode === 'manual' ? Number(framing.center_y ?? 0.5) : 0.5,
+      zoom: framing.mode === 'manual' ? Number(framing.zoom ?? 1) : 1,
+    };
+    $('frameZoom').value = String(framePosition.zoom);
+    $('frameZoomValue').textContent = `${framePosition.zoom.toFixed(2)}×`;
+    $('frameSourceVideo').src = '/media?path=' + encodeURIComponent(data.source_master_path) + '&_=' + Date.now();
+    $('frameResultVideo').src = '/media?path=' + encodeURIComponent(data.video_path) + '&_=' + Date.now();
+    showFrameState(framing.mode === 'auto_face_tracking' ? 'The saved Short currently uses automatic face tracking. Saving here changes it to your fixed manual crop.' : 'Manual framing loaded.');
+  } catch (e) {
+    showFrameState(e.message, true);
+    $('saveFrameBtn').disabled = true;
+  }
+}
+
+function closeFrameEditor() {
+  const source = $('frameSourceVideo');
+  source.pause();
+  source.removeAttribute('src');
+  source.load();
+  $('frameResultVideo').removeAttribute('src');
+  $('frameResultVideo').load();
+  activeFramePath = null;
+  $('saveFrameBtn').disabled = false;
+  if (framePreviewAnimation) cancelAnimationFrame(framePreviewAnimation);
+  framePreviewAnimation = null;
+  $('frameDialog').close();
+}
+
+function frameCropFractions() {
+  const video = $('frameSourceVideo');
+  if (!video.videoWidth || !video.videoHeight) return {width: 0.3, height: 1};
+  let height = Math.min(1, (video.videoWidth / video.videoHeight) * (16 / 9));
+  let width = height * (video.videoHeight / video.videoWidth) * (9 / 16);
+  height /= framePosition.zoom;
+  width /= framePosition.zoom;
+  return {width, height};
+}
+
+function clampFramePosition() {
+  const crop = frameCropFractions();
+  framePosition.centerX = Math.max(crop.width / 2, Math.min(1 - crop.width / 2, framePosition.centerX));
+  framePosition.centerY = Math.max(crop.height / 2, Math.min(1 - crop.height / 2, framePosition.centerY));
+}
+
+function updateFrameOverlay() {
+  const video = $('frameSourceVideo');
+  const overlay = $('cropOverlay');
+  if (!video.videoWidth || !video.clientWidth) return;
+  clampFramePosition();
+  const crop = frameCropFractions();
+  overlay.style.left = `${video.offsetLeft + (framePosition.centerX - crop.width / 2) * video.clientWidth}px`;
+  overlay.style.top = `${video.offsetTop + (framePosition.centerY - crop.height / 2) * video.clientHeight}px`;
+  overlay.style.width = `${crop.width * video.clientWidth}px`;
+  overlay.style.height = `${crop.height * video.clientHeight}px`;
+  $('frameZoomValue').textContent = `${framePosition.zoom.toFixed(2)}×`;
+  drawFramePreview();
+}
+
+function drawFramePreview() {
+  const video = $('frameSourceVideo');
+  const canvas = $('frameCanvas');
+  if (!video.videoWidth || video.readyState < 2) return;
+  const crop = frameCropFractions();
+  const sw = crop.width * video.videoWidth;
+  const sh = crop.height * video.videoHeight;
+  const sx = framePosition.centerX * video.videoWidth - sw / 2;
+  const sy = framePosition.centerY * video.videoHeight - sh / 2;
+  const context = canvas.getContext('2d');
+  context.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+}
+
+function runFramePreview() {
+  drawFramePreview();
+  if ($('frameDialog').open) framePreviewAnimation = requestAnimationFrame(runFramePreview);
+}
+
+async function saveManualFrame() {
+  if (!activeFramePath) return;
+  setBusy($('saveFrameBtn'), true, 'Rendering…');
+  showFrameState('Re-rendering the Short with this frame. The full-frame master will be kept.');
+  try {
+    const data = await postJson('/api/reframe', {
+      video_path: activeFramePath,
+      center_x: framePosition.centerX,
+      center_y: framePosition.centerY,
+      zoom: framePosition.zoom,
+    });
+    if (!data.ok) throw new Error(data.error || 'Could not save the new frame.');
+    $('frameResultVideo').src = '/media?path=' + encodeURIComponent(activeFramePath) + '&_=' + Date.now();
+    showFrameState('Saved. The upload-ready Short now uses this manual frame.');
+    toast('Short re-rendered with the new frame.');
+    await loadState();
+  } catch (e) {
+    showFrameState(e.message, true);
+  } finally {
+    setBusy($('saveFrameBtn'), false, 'Save and re-render');
+  }
+}
+
 function openReviewDialog() {
   const dialog = $('reviewDialog');
   $('reviewItems').innerHTML = '';
@@ -534,12 +656,66 @@ function bindEvents() {
   $('closeReviewBtn').addEventListener('click', closeReviewDialog);
   $('cancelReviewBtn').addEventListener('click', closeReviewDialog);
   $('reviewDialog').addEventListener('cancel', e => { e.preventDefault(); closeReviewDialog(); });
+  $('closeFrameBtn').addEventListener('click', closeFrameEditor);
+  $('cancelFrameBtn').addEventListener('click', closeFrameEditor);
+  $('saveFrameBtn').addEventListener('click', saveManualFrame);
+  $('frameDialog').addEventListener('cancel', e => { e.preventDefault(); closeFrameEditor(); });
+  $('frameSourceVideo').addEventListener('loadedmetadata', () => {
+    updateFrameOverlay();
+    if (framePreviewAnimation) cancelAnimationFrame(framePreviewAnimation);
+    runFramePreview();
+  });
+  $('frameZoom').addEventListener('input', e => {
+    framePosition.zoom = Number(e.target.value);
+    updateFrameOverlay();
+  });
+  $('centerFrameBtn').addEventListener('click', () => {
+    framePosition.centerX = 0.5;
+    framePosition.centerY = 0.5;
+    framePosition.zoom = 1;
+    $('frameZoom').value = '1';
+    updateFrameOverlay();
+  });
+  let dragOffset = null;
+  $('cropOverlay').addEventListener('pointerdown', e => {
+    const box = $('cropOverlay').getBoundingClientRect();
+    dragOffset = {x: e.clientX - (box.left + box.width / 2), y: e.clientY - (box.top + box.height / 2)};
+    e.currentTarget.setPointerCapture(e.pointerId);
+  });
+  $('cropOverlay').addEventListener('pointermove', e => {
+    if (!dragOffset || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    const video = $('frameSourceVideo').getBoundingClientRect();
+    framePosition.centerX = (e.clientX - dragOffset.x - video.left) / video.width;
+    framePosition.centerY = (e.clientY - dragOffset.y - video.top) / video.height;
+    updateFrameOverlay();
+  });
+  $('cropOverlay').addEventListener('pointerup', e => {
+    dragOffset = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+  });
+  $('cropOverlay').addEventListener('keydown', e => {
+    const step = e.shiftKey ? 0.03 : 0.01;
+    if (e.key === 'ArrowLeft') framePosition.centerX -= step;
+    else if (e.key === 'ArrowRight') framePosition.centerX += step;
+    else if (e.key === 'ArrowUp') framePosition.centerY -= step;
+    else if (e.key === 'ArrowDown') framePosition.centerY += step;
+    else return;
+    e.preventDefault();
+    updateFrameOverlay();
+  });
+  window.addEventListener('resize', updateFrameOverlay);
   $('deleteBtn').addEventListener('click', deleteSelectedShorts);
   $('jobs').addEventListener('click', e => { const btn = e.target.closest('[data-stop-job]'); if (btn) stopJob(btn.dataset.stopJob); });
   $('techJobSelect').addEventListener('change', () => { technicalJobId = $('techJobSelect').value; updateTechnicalProgress(); });
   $('generateBtn').addEventListener('click', () => generateFrom('generateUrl', 'generateAccount', $('generateBtn'), 'generateStatus'));
   $('generateFullBtn').addEventListener('click', () => generateFrom('generateUrlFull', 'generateAccountFull', $('generateFullBtn'), 'generateStatus'));
   $('videoGrid').addEventListener('click', e => {
+    const frameButton = e.target.closest('[data-frame-path]');
+    if (frameButton && !frameButton.disabled) {
+      e.stopPropagation();
+      openFrameEditor(frameButton.dataset.framePath);
+      return;
+    }
     const card = e.target.closest('.video-card');
     if (!card) return;
     const check = e.target.closest('.video-check');

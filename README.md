@@ -136,14 +136,23 @@ details.
 1. Choose a YouTube account.
 2. Generate Shorts from a supported YouTube URL, or place a local source in
    `input/` and run the command-line workflow.
-3. Select one or more rendered Shorts.
-4. Choose **Prepare upload**.
-5. Review the video, title, description, tags, validation result, visibility,
+3. Preview each rendered Short. New renders include an **Adjust frame** control:
+   drag a 9:16 crop over the retained full-frame clip, optionally change zoom,
+   then save to re-render that Short. Automatic face tracking remains the
+   initial framing until a manual crop is saved.
+4. Select one or more rendered Shorts.
+5. Choose **Prepare upload**.
+6. Review the video, title, description, tags, validation result, visibility,
    and planned publishing action.
-6. Choose **Approve and upload** only when the request is correct.
+7. Choose **Approve and upload** only when the request is correct.
 
 Preparing a review does not use YouTube OAuth and does not make YouTube API
 calls.
+
+The framing editor is available for newly generated Shorts. Each one retains a
+full-frame H.264 editing master next to the upload-ready 9:16 file, so manual
+adjustments never crop an already-cropped render. These masters use additional
+disk space and are removed with the Short when **Delete Shorts** is used.
 
 ## Command-line usage
 
