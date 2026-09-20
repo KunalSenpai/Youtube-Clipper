@@ -6,17 +6,19 @@ user-facing behavior, and preserve the project's publishing safeguards.
 ## Development setup
 
 1. Fork and clone the repository.
-2. Run `python scripts/bootstrap.py` (`python3` on Linux/macOS).
-3. Activate `.venv` when working on the full video pipeline.
+2. Run `python scripts/start.py` (`python3` on Linux/macOS) for automatic setup
+   and a first dashboard launch.
+3. Use `.venv` for every development and validation command.
 4. Create a branch from `main`.
 
 Run the portable validation suite before opening a pull request:
 
-```bash
-python scripts/check.py
+```powershell
+.\.venv\Scripts\python.exe scripts\check.py
 ```
 
-Node.js checks are included automatically when Node is available.
+On Linux/macOS, use `.venv/bin/python scripts/check.py`. Node.js checks are
+included automatically when Node is available.
 
 Keep new application code inside the appropriate `youtube_clipper/` package.
 Root Python files are stable compatibility entry points, not implementation

@@ -46,8 +46,11 @@ def main() -> int:
         shutil.copy2(example, accounts)
         print("Created config/accounts.json from the safe example.")
 
-    if not VENV.exists():
-        print(f"Creating virtual environment at {VENV}")
+    if not venv_python().is_file():
+        if VENV.exists():
+            print(f"The existing environment at {VENV} is incomplete; repairing it.")
+        else:
+            print(f"Creating virtual environment at {VENV}")
         venv.EnvBuilder(with_pip=True).create(VENV)
 
     if not args.skip_install:
@@ -77,6 +80,7 @@ def main() -> int:
     print(f"\nActivate: {activate}")
     print(f"Start:    {launch} dashboard.py")
     print(f"Check:    {launch} scripts/check.py")
+    print(f"Doctor:   {launch} scripts/doctor.py")
     print("Using the command above works even when virtual-environment activation is unavailable.")
     return 0
 

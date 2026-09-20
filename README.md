@@ -69,28 +69,34 @@ git clone https://github.com/rajwinder-mankoo/Youtube-Clipper.git
 cd Youtube-Clipper
 ```
 
-### 2. Run the setup helper
+### 2. Set up and start
 
 Windows PowerShell:
 
 ```powershell
-python scripts\bootstrap.py
+python scripts\start.py
 ```
 
 Linux/macOS:
 
 ```bash
-python3 scripts/bootstrap.py
+python3 scripts/start.py
 ```
 
-The helper creates `.venv`, installs the Python dependencies, creates runtime
-directories, restores the example account configuration when needed, and
-reports missing system tools. It never creates OAuth credentials or tokens.
+The starter creates `.venv` when needed, installs the Python dependencies,
+creates runtime directories, restores the example account configuration, runs
+a readiness check, and starts the dashboard with the correct Python
+interpreter. Re-running it is safe. It never creates OAuth credentials or
+tokens.
 
 If `venv` support is missing on Ubuntu, install `python3-venv` first. FFmpeg,
 FFprobe, Deno, and Tesseract must be installed through your operating system.
+The readiness report identifies anything that is still missing before you try
+to generate a Short.
 
-### 3. Configure publishing
+Open <http://127.0.0.1:8765> after the dashboard starts.
+
+### 3. Optional: configure publishing
 
 The repository includes safe defaults in:
 
@@ -147,21 +153,26 @@ The existing `client_secret.json` desktop credential can continue serving
 command-line authorization. Existing upload tokens remain usable, but must be
 reconnected once before the Analytics page can read retention data.
 
-### 4. Start the dashboard
+### 4. Later launches and diagnostics
 
-Windows PowerShell:
+Use the same one-command starter for normal launches:
 
 ```powershell
-.\.venv\Scripts\python.exe dashboard.py
+python scripts\start.py
 ```
 
-Linux/macOS:
+To inspect the installation without starting the dashboard:
 
-```bash
-.venv/bin/python dashboard.py
+```powershell
+.\.venv\Scripts\python.exe scripts\doctor.py
 ```
 
-Open <http://127.0.0.1:8765>.
+On Linux/macOS, use `.venv/bin/python scripts/doctor.py`.
+
+If setup is interrupted, run `python scripts/bootstrap.py` again. Always start
+the application through `scripts/start.py` or the `.venv` Python shown by the
+setup helper; using an unrelated system Python is the most common cause of
+missing-package errors.
 
 ## Dashboard workflow
 

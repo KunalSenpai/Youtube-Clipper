@@ -34,6 +34,7 @@ def main() -> int:
             "tests.test_trimming",
             "tests.test_caption_style",
             "tests.test_accounts_analytics",
+            "tests.test_setup",
             "-v",
         ],
     )

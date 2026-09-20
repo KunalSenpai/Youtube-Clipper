@@ -7,10 +7,16 @@ a web-framework dependency.
 ## Start the dashboard
 
 ```bash
-python dashboard.py
+python scripts/start.py
 ```
 
 Open <http://127.0.0.1:8765>.
+
+The starter creates or repairs the project virtual environment, checks the
+installation, and always launches the dashboard with that environment. Run
+`.venv/bin/python scripts/doctor.py` on Linux/macOS or
+`.\.venv\Scripts\python.exe scripts\doctor.py` on Windows for diagnostics
+without starting the server.
 
 ## Accounts
 
