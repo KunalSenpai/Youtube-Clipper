@@ -69,9 +69,15 @@ def main() -> int:
         if sys.platform == "win32"
         else "source .venv/bin/activate"
     )
+    launch = (
+        r".\.venv\Scripts\python.exe"
+        if sys.platform == "win32"
+        else ".venv/bin/python"
+    )
     print(f"\nActivate: {activate}")
-    print("Start:    python dashboard.py")
-    print("Check:    python scripts/check.py")
+    print(f"Start:    {launch} dashboard.py")
+    print(f"Check:    {launch} scripts/check.py")
+    print("Using the command above works even when virtual-environment activation is unavailable.")
     return 0
 
 

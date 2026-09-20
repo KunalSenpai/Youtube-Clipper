@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import tempfile
@@ -10,6 +11,18 @@ from youtube_clipper.publishing.analytics import performance_note
 
 
 class AccountAnalyticsTests(unittest.TestCase):
+    @unittest.skipUnless(
+        importlib.util.find_spec("google_auth_oauthlib")
+        and importlib.util.find_spec("googleapiclient"),
+        "Google OAuth dependencies are not installed",
+    )
+    def test_oauth_runtime_dependencies_import(self):
+        from google_auth_oauthlib.flow import Flow
+        from googleapiclient.discovery import build
+
+        self.assertTrue(callable(Flow.from_client_secrets_file))
+        self.assertTrue(callable(build))
+
     def test_connection_status_does_not_expose_token_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -66,6 +79,12 @@ class AccountAnalyticsTests(unittest.TestCase):
         self.assertEqual(callback["state"], "expected-state")
         self.assertEqual(callback["code_verifier"], "expected-verifier")
         self.assertFalse(callback["autogenerate_code_verifier"])
+
+    def test_missing_oauth_dependency_message_uses_project_setup(self):
+        message = account_connections.oauth_dependency_help()
+        self.assertIn("scripts/bootstrap.py", message)
+        self.assertIn(".venv", message)
+        self.assertIn("dashboard.py", message)
 
     def test_feedback_uses_retention_and_sample_size(self):
         self.assertIn("Early data", performance_note({"views": 4, "averageViewPercentage": 90}))

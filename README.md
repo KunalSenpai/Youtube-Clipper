@@ -139,6 +139,10 @@ Use the exact address displayed in that installation's Accounts page. Each
 clone keeps its own ignored `oauth_web_client.json` and OAuth token; cloning the
 repository does not copy either secret.
 
+The dashboard safely enables OAuthLib's HTTP exception only while processing a
+validated localhost OAuth request. Do not set `OAUTHLIB_INSECURE_TRANSPORT`
+globally; Tailscale and other remote dashboard addresses still require HTTPS.
+
 The existing `client_secret.json` desktop credential can continue serving
 command-line authorization. Existing upload tokens remain usable, but must be
 reconnected once before the Analytics page can read retention data.

@@ -23,6 +23,19 @@ ANALYTICS_SCOPES = set(YOUTUBE_CONNECT_SCOPES[-2:])
 LOCAL_OAUTH_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
+def oauth_dependency_help():
+    python = (
+        r".\.venv\Scripts\python.exe"
+        if os.name == "nt"
+        else ".venv/bin/python"
+    )
+    return (
+        "Google OAuth dependencies are missing from the Python running this dashboard. "
+        f"Run 'python scripts/bootstrap.py', then restart with "
+        f"'{python} dashboard.py'."
+    )
+
+
 @contextmanager
 def oauth_transport(redirect_uri):
     """Permit OAuthLib's HTTP exception only for a validated loopback callback."""
@@ -98,7 +111,7 @@ def begin_youtube_connection(account, origin):
     try:
         from google_auth_oauthlib.flow import Flow
     except ImportError as exc:
-        raise RuntimeError("Install the project requirements before connecting YouTube.") from exc
+        raise RuntimeError(oauth_dependency_help()) from exc
     if not WEB_CLIENT_FILE.is_file():
         raise ValueError(
             "Add a Google OAuth Web application file named oauth_web_client.json, "
