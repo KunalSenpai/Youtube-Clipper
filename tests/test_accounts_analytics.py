@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +32,19 @@ class AccountAnalyticsTests(unittest.TestCase):
             account_connections.validate_dashboard_origin("http://127.0.0.1:8765"),
             "http://127.0.0.1:8765",
         )
+
+    def test_local_oauth_transport_is_temporary_and_loopback_only(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with account_connections.oauth_transport(
+                "http://127.0.0.1:8765/oauth/youtube/callback"
+            ):
+                self.assertEqual(os.environ.get("OAUTHLIB_INSECURE_TRANSPORT"), "1")
+            self.assertNotIn("OAUTHLIB_INSECURE_TRANSPORT", os.environ)
+
+            with account_connections.oauth_transport(
+                "https://youtube-clipper.example.ts.net/oauth/youtube/callback"
+            ):
+                self.assertNotIn("OAUTHLIB_INSECURE_TRANSPORT", os.environ)
 
     def test_feedback_uses_retention_and_sample_size(self):
         self.assertIn("Early data", performance_note({"views": 4, "averageViewPercentage": 90}))
