@@ -1,6 +1,6 @@
 # YouTube Clipper
 
-[![CI](https://github.com/KunalSenpai/Youtube-Clipper/actions/workflows/ci.yml/badge.svg)](https://github.com/KunalSenpai/Youtube-Clipper/actions/workflows/ci.yml)
+[![CI](https://github.com/rajwinder-mankoo/Youtube-Clipper/actions/workflows/ci.yml/badge.svg)](https://github.com/rajwinder-mankoo/Youtube-Clipper/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-555)](#requirements)
 
@@ -61,45 +61,41 @@ The default Faster-Whisper configuration uses CPU with `int8` compute and the
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/KunalSenpai/Youtube-Clipper.git
+git clone https://github.com/rajwinder-mankoo/Youtube-Clipper.git
 cd Youtube-Clipper
 ```
 
-### 2. Create a virtual environment
+### 2. Run the setup helper
 
 Windows PowerShell:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+python scripts\bootstrap.py
 ```
 
-Linux:
+Linux/macOS:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python3 scripts/bootstrap.py
 ```
 
-### 3. Install Python dependencies
+The helper creates `.venv`, installs the Python dependencies, creates runtime
+directories, restores the example account configuration when needed, and
+reports missing system tools. It never creates OAuth credentials or tokens.
 
-```bash
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
+If `venv` support is missing on Ubuntu, install `python3-venv` first. FFmpeg,
+FFprobe, Deno, and Tesseract must be installed through your operating system.
 
-Install FFmpeg, Deno, and Tesseract through your operating system before
-running the complete pipeline.
-
-### 4. Configure accounts and settings
+### 3. Configure publishing
 
 The repository includes safe defaults in:
 
 - `config/settings.json`
+- `config/accounts.json`
 - `config/accounts.example.json`
 
-Copy the account example if you want to replace the included default account
-list:
+Edit `config/accounts.json` to define publishing destinations. To restore the
+safe example:
 
 ```bash
 cp config/accounts.example.json config/accounts.json
@@ -120,10 +116,18 @@ client_secret.json
 OAuth secrets, tokens, generated media, caches, and logs are excluded by
 `.gitignore`.
 
-### 5. Start the dashboard
+### 4. Start the dashboard
+
+Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe dashboard.py
+```
+
+Linux/macOS:
 
 ```bash
-python dashboard.py
+.venv/bin/python dashboard.py
 ```
 
 Open <http://127.0.0.1:8765>.
@@ -212,6 +216,7 @@ Youtube-Clipper/
 |   `-- pipeline.py        Download, transcription, selection, and rendering
 |-- dashboard/             Browser interface assets
 |-- config/                User-editable account and application settings
+|-- scripts/               Setup and validation helpers
 |-- tests/                 Regression checks
 |-- docs/                  Operations and architecture documentation
 |-- dashboard.py           Stable dashboard entry point
@@ -229,12 +234,20 @@ created locally and are not committed.
 
 ## Testing
 
-Run the regression checks:
+Run all available checks:
+
+```bash
+python scripts/check.py
+```
+
+This compiles Python, runs the regression and unit suites, and validates the
+dashboard JavaScript when Node.js is available. Individual checks can also be
+run directly:
 
 ```bash
 python -m tests.test_isolation
 python -m unittest tests.test_publishing_safety
-python -m unittest tests.test_storage_cleanup tests.test_captions
+python -m unittest tests.test_storage_cleanup tests.test_captions tests.test_framing_paths
 ```
 
 Validate all Python files:
@@ -251,40 +264,6 @@ Live uploads sharing an upload log cannot run concurrently. A second upload
 fails with a retry message while the first is active. New renders retain their
 compressed timeline for subtitle timing; older editing manifests reuse their
 retained caption layout when available.
-
-## Self-hosting
-
-The dashboard binds to `127.0.0.1:8765` by default. For an always-on server,
-keep it on localhost and place it behind a private access layer such as
-Tailscale Serve. Do not expose the dashboard directly to the public internet;
-it is intended as a private control panel and does not provide its own user
-authentication.
-
-See [Proxmox deployment](docs/PROXMOX_DEPLOYMENT.md) for a recommended VM,
-systemd, storage, and private-network setup.
-
-## Security
-
-Never commit OAuth client secrets, access tokens, refresh tokens, cookies, or
-generated private media. See [SECURITY.md](SECURITY.md) for reporting guidance
-and deployment precautions. Data handling is described in
-[PRIVACY.md](PRIVACY.md).
-
-## Contributing
-
-Bug reports and focused pull requests are welcome. Read
-[CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change.
-
-## Project status
-
-This is an actively developed personal automation project. Review generated
-clips and metadata before publishing, and test upgrades with private uploads
-first.
-
-## License
-
-No open-source license has been selected yet. Until a license is added, the
-repository is publicly viewable but standard copyright restrictions apply.
 
 ## Storage cleanup
 
@@ -319,3 +298,37 @@ Caption saves reject overlapping/out-of-range times, stale edits, and active
 dashboard jobs. Stop separate command-line processing before editing. Storage
 cleanup can remove these clean editing copies; final Shorts and subtitle files
 are preserved.
+
+## Self-hosting
+
+The dashboard binds to `127.0.0.1:8765` by default. For an always-on server,
+keep it on localhost and place it behind a private access layer such as
+Tailscale Serve. Do not expose the dashboard directly to the public internet;
+it is intended as a private control panel and does not provide its own user
+authentication.
+
+See [Proxmox deployment](docs/PROXMOX_DEPLOYMENT.md) for a recommended VM,
+systemd, storage, and private-network setup.
+
+## Security
+
+Never commit OAuth client secrets, access tokens, refresh tokens, cookies, or
+generated private media. See [SECURITY.md](SECURITY.md) for reporting guidance
+and deployment precautions. Data handling is described in
+[PRIVACY.md](PRIVACY.md).
+
+## Contributing
+
+Bug reports and focused pull requests are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change.
+
+## Project status
+
+This is an actively developed personal automation project. Review generated
+clips and metadata before publishing, and test upgrades with private uploads
+first.
+
+## License
+
+No open-source license has been selected yet. Until a license is added, the
+repository is publicly viewable but standard copyright restrictions apply.

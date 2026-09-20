@@ -5,11 +5,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pysubs2
+try:
+    import pysubs2
+except ImportError:
+    pysubs2 = None
 from youtube_clipper.video import captions
 from youtube_clipper.publishing import youtube
 
 
+@unittest.skipUnless(pysubs2, "pysubs2 is not installed")
 class CaptionTests(unittest.TestCase):
     def test_timing_and_text_validation(self):
         self.assertEqual(captions.validate_cues([{"start": 0, "end": 1, "text": "Hello"}], 2)[0]["end"], 1000)

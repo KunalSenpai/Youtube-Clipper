@@ -1,6 +1,7 @@
 """Offline regressions for dashboard requests, upload durability and captions."""
 
 import io
+import importlib.util
 import json
 import subprocess
 import sys
@@ -77,6 +78,7 @@ class PublishingSafetyTests(unittest.TestCase):
             self.assertIn("00:00:01,650 --> 00:00:02,650", result)
             self.assertNotIn("omitted", result)
 
+    @unittest.skipUnless(importlib.util.find_spec("pysubs2"), "pysubs2 is not installed")
     def test_existing_manifest_uses_rendered_captions(self):
         import pysubs2
         with tempfile.TemporaryDirectory() as directory, patch.object(youtube, "TEMP_DIR", Path(directory)):

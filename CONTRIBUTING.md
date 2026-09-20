@@ -6,18 +6,17 @@ user-facing behavior, and preserve the project's publishing safeguards.
 ## Development setup
 
 1. Fork and clone the repository.
-2. Create a virtual environment.
-3. Install `requirements.txt` when working on the full video pipeline.
+2. Run `python scripts/bootstrap.py` (`python3` on Linux/macOS).
+3. Activate `.venv` when working on the full video pipeline.
 4. Create a branch from `main`.
 
-For regression and policy work, the standard-library test suite can run without
-installing the media dependencies:
+Run the portable validation suite before opening a pull request:
 
 ```bash
-python -m compileall -q .
-python -m tests.test_isolation
-node --check dashboard/app.js
+python scripts/check.py
 ```
+
+Node.js checks are included automatically when Node is available.
 
 Keep new application code inside the appropriate `youtube_clipper/` package.
 Root Python files are stable compatibility entry points, not implementation

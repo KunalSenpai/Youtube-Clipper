@@ -46,7 +46,7 @@ deno --version
 sudo adduser --system --group --home /srv/youtube-clipper ytclipper
 sudo mkdir -p /srv/youtube-clipper/app
 sudo chown -R ytclipper:ytclipper /srv/youtube-clipper
-sudo -u ytclipper git clone https://github.com/KunalSenpai/Youtube-Clipper.git \
+sudo -u ytclipper git clone https://github.com/rajwinder-mankoo/Youtube-Clipper.git \
   /srv/youtube-clipper/app
 sudo -u ytclipper python3 -m venv /srv/youtube-clipper/app/.venv
 sudo -u ytclipper /srv/youtube-clipper/app/.venv/bin/python -m pip install \
