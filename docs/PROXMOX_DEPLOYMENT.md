@@ -48,11 +48,9 @@ sudo mkdir -p /srv/youtube-clipper/app
 sudo chown -R ytclipper:ytclipper /srv/youtube-clipper
 sudo -u ytclipper git clone https://github.com/rajwinder-mankoo/Youtube-Clipper.git \
   /srv/youtube-clipper/app
-sudo -u ytclipper python3 -m venv /srv/youtube-clipper/app/.venv
-sudo -u ytclipper /srv/youtube-clipper/app/.venv/bin/python -m pip install \
-  --upgrade pip
-sudo -u ytclipper /srv/youtube-clipper/app/.venv/bin/python -m pip install \
-  -r /srv/youtube-clipper/app/requirements.txt
+sudo -u ytclipper python3 /srv/youtube-clipper/app/scripts/bootstrap.py
+sudo -u ytclipper /srv/youtube-clipper/app/.venv/bin/python \
+  /srv/youtube-clipper/app/scripts/doctor.py
 ```
 
 For larger installations, mount a separate filesystem at
@@ -62,16 +60,16 @@ target disk before formatting or changing `/etc/fstab`.
 
 ## Credentials
 
-Authorize each YouTube account on a workstation first, then copy the OAuth
-client file and generated token files to their configured paths on the VM.
-The current OAuth callback is designed for a browser on the same machine, so a
-headless VM is not the best place to perform first-time authorization.
+For dashboard account connection, create a Google OAuth **Web application**
+credential, save it as `/srv/youtube-clipper/app/oauth_web_client.json`, and
+register the exact Tailscale callback displayed on the Accounts page. You can
+then complete authorization from any browser connected to your tailnet.
 
 Restrict every credential file:
 
 ```bash
-sudo chown ytclipper:ytclipper /srv/youtube-clipper/app/client_secret.json
-sudo chmod 600 /srv/youtube-clipper/app/client_secret.json
+sudo chown ytclipper:ytclipper /srv/youtube-clipper/app/oauth_web_client.json
+sudo chmod 600 /srv/youtube-clipper/app/oauth_web_client.json
 ```
 
 Apply the same ownership and mode to token files.

@@ -7,10 +7,16 @@ a web-framework dependency.
 ## Start the dashboard
 
 ```bash
-python dashboard.py
+python scripts/start.py
 ```
 
 Open <http://127.0.0.1:8765>.
+
+The starter creates or repairs the project virtual environment, checks the
+installation, and always launches the dashboard with that environment. Run
+`.venv/bin/python scripts/doctor.py` on Linux/macOS or
+`.\.venv\Scripts\python.exe scripts\doctor.py` on Windows for diagnostics
+without starting the server.
 
 ## Accounts
 
@@ -40,6 +46,12 @@ API and YouTube Analytics API, and save its downloaded credentials as
 client's authorized redirect URIs. Remote connections require HTTPS; the
 Tailscale Serve address satisfies this requirement. Credentials remain on the
 server, and disconnecting does not remove upload history.
+
+The callback is derived from the address used to open the dashboard. A local
+clone opened at `http://127.0.0.1:8765` uses
+`http://127.0.0.1:8765/oauth/youtube/callback`; a server opened through
+Tailscale uses its `https://...ts.net/oauth/youtube/callback` address. Each
+installation needs its own ignored `oauth_web_client.json` and token files.
 
 ## Generation
 

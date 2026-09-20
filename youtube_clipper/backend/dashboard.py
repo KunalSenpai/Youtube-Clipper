@@ -662,7 +662,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 response_url = f"{pending['redirect_uri']}?{parsed.query}"
                 channel = finish_youtube_connection(
-                    account, state, pending["redirect_uri"], response_url
+                    account,
+                    state,
+                    pending["redirect_uri"],
+                    response_url,
+                    pending["code_verifier"],
                 )
                 return self.serve_oauth_result(True, f"Connected to {channel}.")
             except Exception as exc:
@@ -909,13 +913,19 @@ class Handler(BaseHTTPRequestHandler):
                 if parsed.path == "/api/accounts/disconnect":
                     disconnect_account(account)
                     return json_response(self, {"ok": True})
-                authorization_url, state, redirect_uri = begin_youtube_connection(
+                (
+                    authorization_url,
+                    state,
+                    redirect_uri,
+                    code_verifier,
+                ) = begin_youtube_connection(
                     account, origin or f"http://{self.headers.get('Host', '')}"
                 )
                 with PROCESS_LOCK:
                     OAUTH_FLOWS[state] = {
                         "account_id": account["id"],
                         "redirect_uri": redirect_uri,
+                        "code_verifier": code_verifier,
                     }
                 return json_response(self, {"ok": True, "authorization_url": authorization_url})
             if parsed.path == "/api/trim":

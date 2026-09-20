@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -18,6 +20,38 @@ YOUTUBE_CONNECT_SCOPES = [
     "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
 ANALYTICS_SCOPES = set(YOUTUBE_CONNECT_SCOPES[-2:])
+LOCAL_OAUTH_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def oauth_dependency_help():
+    python = (
+        r".\.venv\Scripts\python.exe"
+        if os.name == "nt"
+        else ".venv/bin/python"
+    )
+    return (
+        "Google OAuth dependencies are missing from the Python running this dashboard. "
+        f"Run 'python scripts/bootstrap.py', then restart with "
+        f"'{python} dashboard.py'."
+    )
+
+
+@contextmanager
+def oauth_transport(redirect_uri):
+    """Permit OAuthLib's HTTP exception only for a validated loopback callback."""
+    parsed = urlparse(str(redirect_uri or ""))
+    local_http = parsed.scheme == "http" and parsed.hostname in LOCAL_OAUTH_HOSTS
+    previous = os.environ.get("OAUTHLIB_INSECURE_TRANSPORT")
+    if local_http:
+        os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+    try:
+        yield
+    finally:
+        if local_http:
+            if previous is None:
+                os.environ.pop("OAUTHLIB_INSECURE_TRANSPORT", None)
+            else:
+                os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = previous
 
 
 def token_path(account):
@@ -55,17 +89,29 @@ def connection_status(account):
 
 def validate_dashboard_origin(origin):
     parsed = urlparse(str(origin or ""))
-    local = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    local = parsed.hostname in LOCAL_OAUTH_HOSTS
     if not parsed.netloc or (parsed.scheme != "https" and not local):
         raise ValueError("Account connection requires the HTTPS Tailscale dashboard or localhost.")
     return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def youtube_oauth_flow(flow_class, *, state=None, code_verifier=None):
+    kwargs = {
+        "scopes": YOUTUBE_CONNECT_SCOPES,
+        "autogenerate_code_verifier": code_verifier is None,
+    }
+    if state is not None:
+        kwargs["state"] = state
+    if code_verifier is not None:
+        kwargs["code_verifier"] = code_verifier
+    return flow_class.from_client_secrets_file(str(WEB_CLIENT_FILE), **kwargs)
 
 
 def begin_youtube_connection(account, origin):
     try:
         from google_auth_oauthlib.flow import Flow
     except ImportError as exc:
-        raise RuntimeError("Install the project requirements before connecting YouTube.") from exc
+        raise RuntimeError(oauth_dependency_help()) from exc
     if not WEB_CLIENT_FILE.is_file():
         raise ValueError(
             "Add a Google OAuth Web application file named oauth_web_client.json, "
@@ -73,24 +119,30 @@ def begin_youtube_connection(account, origin):
         )
     base = validate_dashboard_origin(origin)
     redirect_uri = f"{base}/oauth/youtube/callback"
-    flow = Flow.from_client_secrets_file(str(WEB_CLIENT_FILE), scopes=YOUTUBE_CONNECT_SCOPES)
+    flow = youtube_oauth_flow(Flow)
     flow.redirect_uri = redirect_uri
-    authorization_url, state = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent",
-    )
-    return authorization_url, state, redirect_uri
+    with oauth_transport(redirect_uri):
+        authorization_url, state = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="true",
+            prompt="consent",
+        )
+    if not flow.code_verifier:
+        raise RuntimeError("Google OAuth did not create the required PKCE verifier.")
+    return authorization_url, state, redirect_uri, flow.code_verifier
 
 
-def finish_youtube_connection(account, state, redirect_uri, authorization_response):
+def finish_youtube_connection(
+    account, state, redirect_uri, authorization_response, code_verifier
+):
     from google_auth_oauthlib.flow import Flow
     from googleapiclient.discovery import build
-    flow = Flow.from_client_secrets_file(
-        str(WEB_CLIENT_FILE), scopes=YOUTUBE_CONNECT_SCOPES, state=state
+    flow = youtube_oauth_flow(
+        Flow, state=state, code_verifier=code_verifier
     )
     flow.redirect_uri = redirect_uri
-    flow.fetch_token(authorization_response=authorization_response)
+    with oauth_transport(redirect_uri):
+        flow.fetch_token(authorization_response=authorization_response)
     credentials = flow.credentials
     channel = build("youtube", "v3", credentials=credentials).channels().list(
         part="snippet", mine=True
