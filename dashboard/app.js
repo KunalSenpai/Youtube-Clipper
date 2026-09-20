@@ -22,6 +22,16 @@ let framePreviewAnimation = null;
 
 const $ = id => document.getElementById(id);
 
+function renderConnectionDetails() {
+  if (typeof location === 'undefined') return;
+  const hostname = location.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const local = ['127.0.0.1', 'localhost', '::1'].includes(hostname);
+  const mode = $('connectionMode');
+  const callback = $('oauthCallbackUrl');
+  if (mode) mode.textContent = local ? 'Localhost only' : (location.protocol === 'https:' ? 'Private HTTPS / Tailscale' : 'Private network');
+  if (callback) callback.textContent = `${location.origin}/oauth/youtube/callback`;
+}
+
 async function loadState() {
   try {
     const r = await fetch('/api/state?_=' + Date.now(), {cache: 'no-store'});
@@ -1197,6 +1207,7 @@ function bindEvents() {
   });
 }
 
+renderConnectionDetails();
 bindEvents();
 loadState();
 technicalTimer = setInterval(updateTechnicalProgress, 1200);

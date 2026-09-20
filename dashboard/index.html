@@ -23,7 +23,7 @@
       <button type="button" class="nav" data-section="storage"><span class="nav-icon">06</span><span>Storage</span></button>
       <button type="button" class="nav" data-section="analytics"><span class="nav-icon">07</span><span>Analytics</span></button>
     </nav>
-    <div class="side-note"><span class="live-dot"></span><div><b>Private connection</b><span>Tailscale / localhost</span></div></div>
+    <div class="side-note"><span class="live-dot"></span><div><b>Private connection</b><span id="connectionMode">Detecting address…</span></div></div>
   </aside>
 
   <main id="workspace">
@@ -145,7 +145,7 @@
       <div class="panel">
         <div class="panel-head"><div><span class="section-kicker">Destinations</span><h2>Connected accounts</h2><p>Account credentials stay on the server and are never sent to the browser.</p></div><span class="panel-index">05</span></div>
         <div id="accounts" class="account-list"></div>
-        <div class="info-box"><b>Connect YouTube</b><p>The dashboard connection uses <code>oauth_web_client.json</code>. Register <code>https://your-tailscale-name/oauth/youtube/callback</code> as an authorized redirect URI in Google Cloud.</p></div>
+        <div class="info-box"><b>Connect YouTube</b><p>This installation needs its own <code>oauth_web_client.json</code>. In Google Cloud, register this exact authorized redirect URI:</p><p><code id="oauthCallbackUrl">Detecting this dashboard’s address…</code></p></div>
         <div class="info-box"><b>Instagram</b><p>Instagram remains marked Not configured until a real Meta/Instagram publishing integration is added. It is not simulated.</p></div>
       </div>
     </section>
@@ -296,7 +296,7 @@
   </div>
 </dialog>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script src="/app.js?v=10"></script>
+<script src="/app.js?v=11"></script>
 <script src="/trim.js?v=1"></script>
 <script src="/captions.js?v=2"></script>
 </body>

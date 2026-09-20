@@ -129,6 +129,16 @@ shown on the Accounts page, for example:
 https://youtube-clipper.example.ts.net/oauth/youtube/callback
 ```
 
+For a dashboard opened directly on the same computer, the callback is instead:
+
+```text
+http://127.0.0.1:8765/oauth/youtube/callback
+```
+
+Use the exact address displayed in that installation's Accounts page. Each
+clone keeps its own ignored `oauth_web_client.json` and OAuth token; cloning the
+repository does not copy either secret.
+
 The existing `client_secret.json` desktop credential can continue serving
 command-line authorization. Existing upload tokens remain usable, but must be
 reconnected once before the Analytics page can read retention data.
