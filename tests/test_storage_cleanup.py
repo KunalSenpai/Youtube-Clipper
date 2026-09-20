@@ -68,6 +68,26 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(result["freed_bytes"], 0)
         self.assertEqual(len(result["errors"]), 1)
 
+    def test_configured_external_storage_roots_are_scanned(self):
+        data_root = self.root / "mounted-data"
+        directories = {name: data_root / name for name in ("output", "cache", "input", "logs")}
+        for path in directories.values():
+            path.mkdir(parents=True)
+        master = directories["output"] / "run" / "short_01.source.mp4"
+        master.parent.mkdir(parents=True)
+        master.write_bytes(b"editing master")
+        timestamp = time.time() - 40 * 86400
+        os.utime(master, (timestamp, timestamp))
+
+        snapshot = inventory(self.root, directories=directories)
+
+        self.assertEqual(snapshot["groups"]["output"]["files"], 1)
+        self.assertEqual(snapshot["groups"]["output"]["bytes"], 14)
+        self.assertEqual(snapshot["candidates"][0]["path"], "output/run/short_01.source.mp4")
+        self.assertEqual(Path(snapshot["locations"]["output"]), directories["output"].resolve())
+        cleanup(self.root, snapshot["candidates"], directories=directories)
+        self.assertFalse(master.exists())
+
     def test_cleanup_refuses_active_jobs(self):
         handler = object.__new__(dashboard.Handler)
         handler.path = "/api/storage/cleanup"

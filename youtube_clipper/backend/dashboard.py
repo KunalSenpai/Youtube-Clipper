@@ -27,9 +27,11 @@ from youtube_clipper.backend.storage import inventory as storage_inventory, clea
 from youtube_clipper.video.captions import caption_info, save_captions
 
 ROOT = bot_config.PROJECT_ROOT
+INPUT = bot_config.INPUT_DIR
 OUTPUT = bot_config.OUTPUT_DIR
 CACHE = bot_config.CACHE_DIR
 LOGS = bot_config.LOGS_DIR
+STORAGE_DIRS = {"output": OUTPUT, "cache": CACHE, "input": INPUT, "logs": LOGS}
 REPORTS = OUTPUT / "dry-run-reports"
 DASHBOARD_DIR = ROOT / "dashboard"
 ACCOUNTS_FILE = ROOT / "config" / "accounts.json"
@@ -640,7 +642,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/storage":
             try:
                 days = int(parse_qs(parsed.query).get("days", ["30"])[0])
-                return json_response(self, storage_inventory(ROOT, days))
+                return json_response(self, storage_inventory(ROOT, days, STORAGE_DIRS))
             except (ValueError, OSError) as exc:
                 return json_response(self, {"error": str(exc)}, 400)
 
@@ -839,7 +841,9 @@ class Handler(BaseHTTPRequestHandler):
                     busy = busy or bool(ACTIVE_PROCESSES) or bool(ACTIVE_REFRAMES)
                 if busy:
                     return json_response(self, {"error": "Wait for active dashboard jobs to finish before cleanup."}, 409)
-                result = cleanup_storage(ROOT, body.get("files"), body.get("days", 30))
+                result = cleanup_storage(
+                    ROOT, body.get("files"), body.get("days", 30), STORAGE_DIRS
+                )
                 return json_response(self, result)
             if parsed.path == "/api/stop":
                 ok, message = stop_job(str(body.get("job_id", "")))
