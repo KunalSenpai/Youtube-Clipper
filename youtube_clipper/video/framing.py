@@ -25,6 +25,31 @@ def _inside_output(raw_path, *, suffix=None):
     return path
 
 
+def _caption_file_and_filter_path(raw_path):
+    """Validate a caption under the configured cache, including a linked cache."""
+    caption = Path(raw_path).resolve()
+    cache_root = bot_config.CACHE_DIR.resolve()
+    try:
+        relative = caption.relative_to(cache_root)
+    except ValueError as exc:
+        raise ValueError("The caption file is outside the configured cache folder.") from exc
+    if caption.suffix.lower() != ".ass" or not caption.is_file():
+        raise ValueError("The caption layout is missing. Regenerate this Short.")
+
+    # Prefer the application-facing path (for example cache/... through the
+    # Proxmox symlink) so FFmpeg can run from PROJECT_ROOT as before.
+    configured_path = bot_config.CACHE_DIR / relative
+    try:
+        filter_path = configured_path.relative_to(bot_config.PROJECT_ROOT).as_posix()
+    except ValueError:
+        filter_path = caption.as_posix()
+    # Escape characters meaningful to FFmpeg's filter parser. subprocess
+    # already handles shell quoting; these escapes are for the ass filter.
+    for character in ("\\", ":", "'", ",", "[", "]"):
+        filter_path = filter_path.replace(character, f"\\{character}")
+    return caption, filter_path
+
+
 def crop_geometry(source_width, source_height, center_x, center_y, zoom):
     """Return a clamped 9:16 crop rectangle in source pixels."""
     if source_width < 2 or source_height < 2:
@@ -150,13 +175,9 @@ def reframe_short(video_path, center_x=0.5, center_y=0.5, zoom=1.0, keyframes=No
     if not source_master.is_file():
         raise ValueError("The full-frame editing master is missing. Regenerate this Short.")
 
-    caption_file = Path(manifest.get("caption_file", "")).resolve()
-    try:
-        caption_file.relative_to(bot_config.PROJECT_ROOT.resolve())
-    except ValueError as exc:
-        raise ValueError("The caption file is outside the project folder.") from exc
-    if not caption_file.is_file():
-        raise ValueError("The caption layout is missing. Regenerate this Short.")
+    caption_file, caption_filter_path = _caption_file_and_filter_path(
+        manifest.get("caption_file", "")
+    )
 
     cap = cv2.VideoCapture(str(source_master))
     source_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -214,13 +235,12 @@ def reframe_short(video_path, center_x=0.5, center_y=0.5, zoom=1.0, keyframes=No
         raise ValueError("No frames could be decoded from the editing master.")
 
     try:
-        relative_caption = caption_file.relative_to(bot_config.PROJECT_ROOT).as_posix()
         command = [
             bot_config.FFMPEG,
             "-y",
             "-i", str(cropped_temp),
             "-i", str(output_file),
-            "-vf", f"ass={relative_caption}",
+            "-vf", f"ass={caption_filter_path}",
             "-map", "0:v:0",
             "-map", "1:a:0?",
             "-c:v", "libx264",
