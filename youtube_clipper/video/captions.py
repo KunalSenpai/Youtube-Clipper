@@ -67,15 +67,26 @@ def _color_to_hex(value):
 def caption_style(subtitles):
     style = subtitles.styles.get("Default") or next(iter(subtitles.styles.values()))
     position = next((name for name, alignment in CAPTION_POSITIONS.items() if alignment == style.alignment), "bottom")
+    font_name = str(style.fontname or "").strip()
+    if not font_name or len(font_name) > 80 or re.search(r"[{}\\\x00-\x1f]", font_name):
+        font_name = "Arial"
+
+    def legacy_number(value, default, minimum, maximum):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return default
+        return value if math.isfinite(value) and minimum <= value <= maximum else default
+
     return normalize_caption_style({
-        "font_name": style.fontname,
-        "font_size": style.fontsize,
+        "font_name": font_name,
+        "font_size": legacy_number(style.fontsize, 38, 20, 120),
         "text_color": _color_to_hex(style.primarycolor),
         "outline_color": _color_to_hex(style.outlinecolor),
-        "outline": style.outline,
-        "shadow": style.shadow,
+        "outline": legacy_number(style.outline, 3, 0, 10),
+        "shadow": legacy_number(style.shadow, 1, 0, 10),
         "position": position,
-        "margin": style.marginv,
+        "margin": legacy_number(style.marginv, 150, 20, 600),
     })
 
 
