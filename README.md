@@ -1,609 +1,352 @@
-YouTube Shorts Automator
+# YouTube Clipper
 
-A local, privacy-focused automation tool for turning long-form video
-into short-form vertical videos and managing YouTube Shorts uploads from
-a simple dashboard.
+[![CI](https://github.com/rajwinder-mankoo/Youtube-Clipper/actions/workflows/ci.yml/badge.svg)](https://github.com/rajwinder-mankoo/Youtube-Clipper/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-555)](#requirements)
 
-Important: Only process and publish video content that you own or
-are authorized/licensed to use. This project does not bypass copyright
-restrictions or platform policies.
+Turn long-form videos into vertical YouTube Shorts, review the generated
+metadata, and publish from a private local dashboard.
 
-Features
+YouTube Clipper combines transcription, source detection, moment selection,
+vertical rendering, captions, metadata generation, upload planning, and
+multi-account publishing in one self-hosted workflow.
 
-🎬 Automatic Short Generation
+> [!IMPORTANT]
+> Process and publish only content that you own or are authorized to use. This
+> project does not bypass copyright restrictions or platform policies.
 
-Process local video files or download supported YouTube sources with
-yt-dlp.
+## Highlights
 
-Transcribe the complete source using Faster-Whisper.
+- Downloads supported sources with `yt-dlp` or processes local video files.
+- Transcribes complete sources with Faster-Whisper and reuses cached results.
+- Selects coherent moments instead of cutting at fixed intervals.
+- Keeps every generated or edited Short below one minute (59 seconds maximum).
+- Trims clips while keeping captions, manifests, and editing copies aligned.
+- Edits caption typography, colors, outline, shadow, position, and safe-area margin.
+- Renders 1080 x 1920 video with synchronized SRT captions.
+- Generates source-aware titles, descriptions, and tags.
+- Keeps metadata isolated between sources and clips.
+- Connects YouTube accounts with separate tokens and upload logs.
+- Summarizes views, watch time, and audience retention with editing feedback.
+- Prevents duplicate uploads and supports private, public, and scheduled modes.
+- Provides a review-and-approve step before any dashboard upload.
+- Offers a true dry run that does not open OAuth or call the YouTube API.
 
-Cache transcripts so the same source does not need to be transcribed
-repeatedly.
+## How it works
 
-Detect the broader video/source context before generating metadata.
+```mermaid
+flowchart LR
+    A[Local video or URL] --> B[Download and transcribe]
+    B --> C[Detect source context]
+    C --> D[Select strong moments]
+    D --> E[Render vertical Shorts]
+    E --> F[Generate captions and metadata]
+    F --> G[Review and edit]
+    G --> H[Approve and publish]
+```
 
-Find content-driven moments instead of cutting at arbitrary fixed
-intervals.
+The review step stores the exact planned YouTube request. The uploader refuses
+to continue if the payload changes after approval.
 
-Prefer coherent conversation/story segments with natural sentence
-and pause boundaries.
+## Requirements
 
-Avoid excessive overlap and duplicate moments.
+- Python 3.10 or newer
+- FFmpeg and FFprobe on `PATH`
+- Deno for current `yt-dlp` YouTube JavaScript handling
+- Tesseract OCR, recommended for improved source detection
+- Google/YouTube OAuth desktop credentials for publishing
+- Enough free storage for source video, render cache, and generated Shorts
 
-Generate vertical 1080 × 1920 Shorts.
+The default Faster-Whisper configuration uses CPU with `int8` compute and the
+`small` model. A GPU is not required.
 
-Apply speaker-aware framing with restrained face cropping/zoom.
+## Quick start
 
-Generate synchronized .srt captions for each Short.
+### 1. Clone the repository
 
-🧠 Context-Aware SEO
+```bash
+git clone https://github.com/rajwinder-mankoo/Youtube-Clipper.git
+cd Youtube-Clipper
+```
 
-The SEO system is designed around the larger context of the source,
-rather than blindly converting transcript words into tags.
+### 2. Run the setup helper
 
-Metadata generation considers information such as: - Series/source
-name - Source type - Season/episode information when available -
-Verified source-level context - Clip-specific context where it can be
-established reliably
+Windows PowerShell:
 
-The generated title includes the series/source name, for example:
+```powershell
+python scripts\bootstrap.py
+```
 
-Butlerger, how may we help you? | The Office
+Linux/macOS:
 
-Tags are validated before upload and are not artificially padded with
-unrelated transcript words just to reach a target count.
+```bash
+python3 scripts/bootstrap.py
+```
 
-📤 YouTube Upload Automation
+The helper creates `.venv`, installs the Python dependencies, creates runtime
+directories, restores the example account configuration when needed, and
+reports missing system tools. It never creates OAuth credentials or tokens.
 
-Upload generated Shorts automatically.
+If `venv` support is missing on Ubuntu, install `python3-venv` first. FFmpeg,
+FFprobe, Deno, and Tesseract must be installed through your operating system.
 
-Upload captions to the exact corresponding YouTube video.
+### 3. Configure publishing
 
-Maintain per-account upload logs.
+The repository includes safe defaults in:
 
-Prevent accidental duplicate uploads.
+- `config/settings.json`
+- `config/accounts.json`
+- `config/accounts.example.json`
 
-Support immediate publishing and scheduled publishing.
+Edit `config/accounts.json` to define publishing destinations. To restore the
+safe example:
 
-Reconcile local logs with the current YouTube channel state.
+```bash
+cp config/accounts.example.json config/accounts.json
+```
 
-🗓️ Intelligent Scheduling
+On Windows PowerShell:
 
-The scheduler uses existing upload/scheduling state rather than blindly
-making every new Short public immediately.
+```powershell
+Copy-Item config\accounts.example.json config\accounts.json
+```
 
-Current policy:
+Place the Google OAuth desktop application file at:
 
-No future scheduled video
-        ↓
-First pending Short → PUBLIC NOW
-Remaining Shorts    → scheduled at the configured interval
+```text
+client_secret.json
+```
 
-Future scheduled video already exists
-        ↓
-New Shorts → scheduled into available slots
+OAuth secrets, tokens, generated media, caches, and logs are excluded by
+`.gitignore`.
 
-The default interval is 12 hours.
+Dashboard account connection and analytics require a separate Google OAuth
+**Web application** credential saved as `oauth_web_client.json`. Enable the
+YouTube Data API and YouTube Analytics API, then register the exact callback
+shown on the Accounts page, for example:
 
-If a previously scheduled video is deleted from YouTube Studio, the
-local upload state can be reconciled so the released slot can be reused.
+```text
+https://youtube-clipper.example.ts.net/oauth/youtube/callback
+```
 
-👥 Multiple YouTube Accounts
+The existing `client_secret.json` desktop credential can continue serving
+command-line authorization. Existing upload tokens remain usable, but must be
+reconnected once before the Analytics page can read retention data.
 
-The bot supports separate YouTube accounts with: - Separate OAuth token
-files - Separate upload logs - Separate duplicate protection -
-Account-specific upload history
+### 4. Start the dashboard
 
-Example:
+Windows PowerShell:
 
-YouTube Main
-YouTube Account 2
+```powershell
+.\.venv\Scripts\python.exe dashboard.py
+```
+
+Linux/macOS:
 
-OAuth credentials and tokens remain local and should never be committed
-to Git.
+```bash
+.venv/bin/python dashboard.py
+```
 
-🖥️ Local Dashboard
+Open <http://127.0.0.1:8765>.
+
+## Dashboard workflow
 
-The dashboard provides: - Video discovery - Video selection - Account
-selection - Upload destination selection - Upload queue - Generation
-jobs - Upload history - Job status - Retry/failed-job handling - Stop
-running generation/upload jobs - Delete generated Shorts and related
-generated metadata - Live technical progress
+See the [dashboard guide](docs/DASHBOARD.md) for account setup and operational
+details.
 
-The Live Technical Progress panel displays: - Current processing
-stage - Job status - Elapsed time - Approximate progress - Recent
-backend log output
+1. Choose a YouTube account.
+2. Generate Shorts from a supported YouTube URL, or place a local source in
+   `input/` and run the command-line workflow.
+3. Preview each rendered Short. New renders include an **Adjust frame** control:
+   seek to a point in the retained full-frame clip, position the 9:16 crop,
+   and release to keep a crop point. Add more points when the subject moves left, center,
+   or right; the renderer moves and zooms smoothly between them. Use Play preview and Undo to refine the movement, then choose Save crop.
+   Automatic tracking is replaced only when you save the manual crop.
+4. Select one or more rendered Shorts.
+5. Choose **Prepare upload**.
+6. Review the video, title, description, tags, validation result, visibility,
+   and planned publishing action.
+7. Choose **Approve and upload** only when the request is correct.
 
-The raw technical console is the authoritative source for detailed
-progress.
+Preparing a review does not use YouTube OAuth and does not make YouTube API
+calls.
 
-🧹 Generated-Short Cleanup
+The framing editor is available for newly generated Shorts. Each one retains a
+full-frame H.264 editing master next to the upload-ready 9:16 file, so manual
+keyframes never crop an already-cropped render. Saved timelines can be reopened
+and revised. These masters use additional disk space and are removed with the
+Short when **Delete Shorts** is used.
 
-The dashboard can delete generated Shorts and their associated generated
-artifacts while preserving source material needed for future processing.
+## Command-line usage
 
-The cleanup system is designed to avoid unnecessarily deleting: -
-Original source downloads - Cached source transcripts
+Process a local source:
 
-Project Structure
+```bash
+python run_all.py local
+```
 
-YT Auto Bot/
-│
-├── main.py
-├── youtube_automator.py
-├── dashboard.py
-├── config.py
-├── seo_generator.py
-├── source_detector.py
-├── run_all.py
-├── requirements.txt
-│
-├── dashboard/
-│   ├── index.html
-│   ├── app.js
-│   └── style.css
-│
-├── config/
-│   ├── accounts.json
-│   └── accounts.example.json
-│
-├── cache/
-│   ├── transcripts
-│   ├── upload logs
-│   └── OAuth token files
-│
-├── output/
-│   └── generated Shorts
-│
-└── logs/
-    └── execution/job logs
+Process a YouTube URL:
 
-Requirements
+```bash
+python run_all.py "https://www.youtube.com/watch?v=VIDEO_ID"
+```
 
-Software
+Preview the full workflow without OAuth or API calls:
 
-Windows 10/11
+```bash
+python run_all.py local --dry-run
+python run_all.py "https://www.youtube.com/watch?v=VIDEO_ID" --dry-run
+```
 
-Python 3.10+ recommended
+Dry-run reports are written to `output/dry-run-reports/`. Each report includes
+validation results, planned order and scheduling, caption information, and the
+exact `videos.insert` request body.
 
-FFmpeg
+Command-line uploads ask for confirmation by default. Set
+`YT_AUTO_BOT_AUTO_UPLOAD=1` only for a deliberately unattended run.
 
-Deno
+## Publishing modes
 
-Google/YouTube OAuth credentials
+Set `privacy_status` in `config/settings.json`:
 
-Internet connection for YouTube downloads/uploads
+| Mode | Behavior |
+|---|---|
+| `private` | Every uploaded Short remains private. |
+| `public` | Every approved Short is published immediately. |
+| `scheduled` | The newest pending Short can publish immediately; remaining Shorts use future slots. |
 
-Faster-Whisper dependencies
+The default scheduling interval is 12 hours. Offline dry-run schedule times are
+estimates based on the local upload log because a dry run never queries the
+channel.
 
-Hardware
+## Project layout
 
-The bot can run on CPU, although transcription is significantly faster
-with a suitable GPU.
+```text
+Youtube-Clipper/
+|-- youtube_clipper/       Application package
+|   |-- backend/           Dashboard server and background jobs
+|   |-- metadata/          Source detection and SEO generation
+|   |-- publishing/        Upload policy, payloads, and YouTube client
+|   |-- video/             Framing and video-editing helpers
+|   |-- cli.py             Command-line workflow orchestration
+|   |-- config.py          Paths, settings, and logging
+|   `-- pipeline.py        Download, transcription, selection, and rendering
+|-- dashboard/             Browser interface assets
+|-- config/                User-editable account and application settings
+|-- scripts/               Setup and validation helpers
+|-- tests/                 Regression checks
+|-- docs/                  Operations and architecture documentation
+|-- dashboard.py           Stable dashboard entry point
+|-- main.py                Stable generation entry point
+|-- run_all.py             Stable workflow entry point
+`-- youtube_automator.py   Stable publishing entry point
+```
 
-The current configuration can use:
+The small root entry files preserve existing commands and the Proxmox systemd
+configuration. Application implementations live in `youtube_clipper/`; see
+[Architecture](docs/ARCHITECTURE.md) for ownership and dependency boundaries.
 
-Whisper model: small
-Device: CPU
-Compute type: int8
+Runtime directories such as `input/`, `output/`, `cache/`, and `logs/` are
+created locally and are not committed.
 
-This can be adjusted in the project configuration if you have hardware
-suitable for another Whisper configuration.
+## Testing
 
-Installation
+Run all available checks:
 
-1. Clone or copy the project
+```bash
+python scripts/check.py
+```
 
-Place the project somewhere such as:
+This compiles Python, runs the regression and unit suites, and validates the
+dashboard JavaScript when Node.js is available. Individual checks can also be
+run directly:
 
-D:\Personal\YT Auto Bot
+```bash
+python -m tests.test_isolation
+python -m unittest tests.test_publishing_safety
+python -m unittest tests.test_storage_cleanup tests.test_captions tests.test_framing_paths
+```
 
-Avoid hard-coding the project location into source files; the
-application derives paths relative to the project.
+Validate all Python files:
 
-2. Create a virtual environment
+```bash
+python -m compileall -q .
+```
 
-From PowerShell:
+The test suite covers metadata isolation, source-name regressions, URL leakage,
+upload confirmation defaults, visibility policy, scheduled payloads, cross-origin
+request protection, upload-log locking and durability, and caption timing.
 
-cd "D:\Personal\YT Auto Bot"
+Live uploads sharing an upload log cannot run concurrently. A second upload
+fails with a retry message while the first is active. New renders retain their
+compressed timeline for subtitle timing; older editing manifests reuse their
+retained caption layout when available.
 
-python -m venv venv
-.\venv\Scripts\activate
+## Storage cleanup
 
-3. Install Python dependencies
+Open **Storage** to inspect output, cache, input, and log sizes alongside free
+space. Select an age filter (30 days by default), review and select eligible
+files, then choose **Delete selected files** and confirm.
 
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+Cleanup removes only editing masters and leftover render scratch videos.
+Deleting a master disables **Adjust frame** until the Short is regenerated.
+Finished Shorts, captions, transcripts, source downloads, manifests, credentials,
+review reports, and upload history are preserved. Changed files are rejected;
+partial failures show what could not be deleted and the space reclaimed.
 
-If the project requires the current yt-dlp EJS dependencies:
+Cleanup is blocked while dashboard jobs are queued or running. Stop separately
+launched command-line processing before cleanup; those processes are not tracked
+by the dashboard. Cleanup is manual, never automatic.
 
-python -m pip install -U "yt-dlp[default]"
+## Caption editor
 
-4. Install FFmpeg
+Choose **Captions** on a Short in the overview or library. Edit text and start/end
+seconds, preview each line, or add and remove lines. **Save captions** re-renders
+that local Short and updates the subtitles used by future uploads. Videos already
+published on YouTube are unchanged.
 
-Make sure ffmpeg is available from PowerShell:
+New generations and crop saves retain a caption-free `.clean.mp4` editing copy
+with the current crop and audio. Older Shorts need their crop saved again or must
+be regenerated before caption editing is available. Edited lines use steady text;
+unchanged lines retain their original highlighting. The preview approximates text
+placement. Font, size, colors, outline, shadow, position, and safe-area margin
+can be changed before rendering.
 
-ffmpeg -version
+Caption saves reject overlapping/out-of-range times, stale edits, and active
+dashboard jobs. Stop separate command-line processing before editing. Storage
+cleanup can remove these clean editing copies; final Shorts and subtitle files
+are preserved.
 
-If the command is not found, install FFmpeg and add its bin directory
-to PATH.
+## Self-hosting
 
-5. Install Deno
+The dashboard binds to `127.0.0.1:8765` by default. For an always-on server,
+keep it on localhost and place it behind a private access layer such as
+Tailscale Serve. Do not expose the dashboard directly to the public internet;
+it is intended as a private control panel and does not provide its own user
+authentication.
 
-Deno is used by yt-dlp for YouTube JavaScript challenge solving.
+See [Proxmox deployment](docs/PROXMOX_DEPLOYMENT.md) for a recommended VM,
+systemd, storage, and private-network setup.
 
-Official installation:
+## Security
 
-irm https://deno.land/install.ps1 | iex
+Never commit OAuth client secrets, access tokens, refresh tokens, cookies, or
+generated private media. See [SECURITY.md](SECURITY.md) for reporting guidance
+and deployment precautions. Data handling is described in
+[PRIVACY.md](PRIVACY.md).
 
-Close and reopen PowerShell after installation.
+## Contributing
 
-Verify:
+Bug reports and focused pull requests are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change.
 
-deno --version
-where.exe deno
+## Project status
 
-If Deno is installed but not on PATH, the downloader can be configured
-to use the executable path directly.
+This is an actively developed personal automation project. Review generated
+clips and metadata before publishing, and test upgrades with private uploads
+first.
 
-YouTube OAuth Setup
+## License
 
-Create YouTube API OAuth credentials in Google Cloud and download the
-OAuth client configuration required by the project.
-
-Do not commit: - OAuth client secrets - Access tokens - Refresh
-tokens - Browser cookies - Cookie exports - API keys
-
-The project stores account-specific authentication locally.
-
-Example account configuration:
-
-{
-  "accounts": [
-    {
-      "id": "youtube_main",
-      "name": "YouTube Main",
-      "platform": "youtube",
-      "token_file": "youtube_token.json",
-      "upload_log": "cache/youtube_upload_log_youtube_main.json"
-    },
-    {
-      "id": "youtube_account2",
-      "name": "YouTube Account 2",
-      "platform": "youtube",
-      "token_file": "youtube_token_account2.json",
-      "upload_log": "cache/youtube_upload_log_account2.json"
-    }
-  ]
-}
-
-Use your actual configuration structure from config/accounts.json.
-
-Running the Bot
-
-Dashboard
-
-Start the local dashboard using the project's normal launcher:
-
-.\venv\Scripts\activate
-python dashboard.py
-
-Then open the local dashboard address shown by the application.
-
-Direct generation
-
-For direct/manual operation:
-
-python main.py
-
-The command-line interface can process a local video or a supported
-YouTube URL.
-
-Full launcher
-
-If using the provided launcher:
-
-python run_all.py
-
-Typical Workflow
-
-Select source
-     ↓
-Download / locate source
-     ↓
-Transcribe complete source
-     ↓
-Cache transcript
-     ↓
-Detect source context
-     ↓
-Find semantic moments
-     ↓
-Select high-quality moments
-     ↓
-Render vertical Shorts
-     ↓
-Generate captions
-     ↓
-Generate context-aware metadata
-     ↓
-Validate metadata
-     ↓
-Select YouTube account
-     ↓
-Check upload history / current schedule
-     ↓
-Upload immediately or schedule
-     ↓
-Upload captions
-     ↓
-Record result in upload history
-
-Source Detection
-
-The source detector attempts to identify the broader context of the
-video.
-
-Example:
-
-Source type: webseries
-Detected source: The Office
-Confidence: 97%
-
-Source context is intentionally kept separate from the individual clip
-transcript.
-
-This prevents a random phrase from a transcript from being treated as
-the name of a series, character, actor, or other entity.
-
-Clip Selection
-
-The selector is content-driven.
-
-It aims to identify moments containing things such as: - A setup and
-response - A complete exchange - A punchline - A reaction - A meaningful
-statement - A coherent conversational unit
-
-It does not require every source to produce exactly 5 or 10 Shorts.
-
-The configured target range is a quality target, not a quota.
-
-A source may therefore produce fewer Shorts when there are not enough
-strong moments.
-
-Captions
-
-Each generated Short receives its own caption file.
-
-Conceptually:
-
-source/
-└── run/
-    ├── short_01.mp4
-    ├── youtube_caption_<clip-id>_01.srt
-    ├── short_02.mp4
-    └── youtube_caption_<clip-id>_02.srt
-
-When a video is uploaded, its caption file is associated with the exact
-returned YouTube videoId.
-
-This prevents captions from one Short being attached to another.
-
-SEO Rules
-
-The metadata system follows several principles:
-
-Titles
-
-Short, readable hook
-
-Series/source included
-
-No unrelated entities
-
-No fabricated context
-
-Tags
-
-Series-level tags are allowed when relevant.
-
-Source-type/context tags can be used when relevant.
-
-Season/episode tags are used only when supported.
-
-Character tags require reliable context.
-
-Transcript words are not automatically converted into tags.
-
-Duplicate tags are removed.
-
-Invalid/empty tags are removed.
-
-The final tag list respects YouTube's tag character limit.
-
-Descriptions
-
-The intended description format is deliberately simple:
-
-Series - "The Office"
-
-#tags -
-#TheOffice #TheOfficeclips #TheOfficeshorts ...
-
-No transcript dump, unrelated character list, source-detection
-explanation, or generated filler should be inserted into the
-description.
-
-Scheduling
-
-The default publishing interval is:
-
-12 hours
-
-The scheduler considers: - Existing local upload logs - Existing YouTube
-videos - Future publishAt values - Deleted videos - Pending Shorts -
-Account-specific history
-
-Example:
-
-Existing schedule:
-10:00 PM
-10:00 AM
-10:00 PM
-
-New Shorts:
-→ next available slot
-→ next available slot
-→ next available slot
-
-A deleted scheduled video should release its slot for future scheduling
-after reconciliation.
-
-Upload States
-
-The dashboard tracks job and upload states separately.
-
-Common states include:
-
-READY
-SELECTED
-QUEUED
-UPLOADING
-UPLOADED
-SCHEDULED
-FAILED
-CANCELLED
-
-A failed upload can be retried without regenerating the Short
-unnecessarily.
-
-Troubleshooting
-
-UnicodeEncodeError: cp1252
-
-If Windows PowerShell displays an error involving:
-
-UnicodeEncodeError
-'charmap' codec can't encode character
-
-the problem is usually Windows console encoding.
-
-The project includes UTF-8-safe output handling so Unicode characters
-such as arrows and other symbols do not terminate the job.
-
-YouTube 429 Too Many Requests
-
-A 429 is a YouTube-side rate-limit response.
-
-Do not repeatedly retry the same URL in a tight loop.
-
-If YouTube asks you to sign in or verify that you are not a bot, use an
-authenticated browser session where appropriate and comply with
-YouTube's requirements.
-
-No supported JavaScript runtime could be found
-
-Check:
-
-deno --version
-where.exe deno
-
-Then restart PowerShell if Deno was just installed.
-
-Upload validation fails
-
-Check the technical log immediately before upload.
-
-The bot should report: - Final title - Description - Tags - Tag count -
-Tag character budget - Validation errors
-
-Do not solve a validation problem by adding irrelevant tags.
-
-A scheduled video is missing
-
-The scheduler reconciles local state with YouTube.
-
-Check: 1. Whether the video still exists on YouTube. 2. Whether the
-local upload log contains its video ID. 3. Whether the video has a
-future publishAt. 4. Whether the correct YouTube account is selected.
-
-Dashboard shows a different number of Shorts
-
-The dashboard and uploader may use different selection/discovery states.
-
-The uploader reports selected files and missing paths in its technical
-log so the discrepancy can be diagnosed without silently uploading the
-wrong files.
-
-Security
-
-Keep the following files private:
-
-cache/*token*.json
-cache/*credentials*.json
-client_secret*.json
-*.cookies
-
-Privacy
-
-The bot is designed to run locally.
-
-Source videos, generated Shorts, transcripts, logs, OAuth tokens, and
-upload history remain on the local machine unless the application sends
-data to an external service as part of an explicitly requested operation
-such as YouTube uploading.
-
-Limitations
-
-YouTube can change its extraction and anti-bot behavior without
-notice.
-
-YouTube API limits and channel upload limits are controlled by
-YouTube.
-
-Scheduled publishing requires YouTube to accept the requested
-publishAt.
-
-Source detection is probabilistic and should be reviewed when
-confidence is low.
-
-Semantic clip selection is designed for coherent moments, but
-automated selection is not equivalent to human editorial review.
-
-SEO generation cannot reliably infer facts that are not supported by
-the available source context.
-
-Instagram upload functionality depends on the configured integration
-and is not represented as working merely because it appears in the
-UI.
-
-Responsible Use
-
-This software is intended as an automation and editing tool.
-
-You are responsible for: - Having rights to the source material -
-Complying with YouTube's Terms of Service and API policies - Complying
-with copyright law - Reviewing generated metadata - Reviewing Shorts
-before publication - Respecting platform upload and rate limits
-
-Development Philosophy
-
-The project prioritizes:
-
-Context over keyword stuffing
-
-Content quality over a fixed number of Shorts
-
-Reliable upload/account separation
-
-Persistent logs and recoverable jobs
-
-Exact caption-to-video binding
-
-Safe scheduling based on actual channel state
-
-Local control of credentials and generated files
-
-Transparent technical progress instead of fake percentages
-
-This project is currently for personal use. No redistribution license is granted unless explicitly stated by the author.
+No open-source license has been selected yet. Until a license is added, the
+repository is publicly viewable but standard copyright restrictions apply.
