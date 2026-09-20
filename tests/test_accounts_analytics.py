@@ -46,6 +46,27 @@ class AccountAnalyticsTests(unittest.TestCase):
             ):
                 self.assertNotIn("OAUTHLIB_INSECURE_TRANSPORT", os.environ)
 
+    def test_pkce_verifier_is_reused_for_callback(self):
+        class FakeFlow:
+            calls = []
+
+            @classmethod
+            def from_client_secrets_file(cls, path, **kwargs):
+                cls.calls.append((path, kwargs))
+                return object()
+
+        account_connections.youtube_oauth_flow(FakeFlow)
+        account_connections.youtube_oauth_flow(
+            FakeFlow, state="expected-state", code_verifier="expected-verifier"
+        )
+        start = FakeFlow.calls[0][1]
+        callback = FakeFlow.calls[1][1]
+        self.assertTrue(start["autogenerate_code_verifier"])
+        self.assertNotIn("code_verifier", start)
+        self.assertEqual(callback["state"], "expected-state")
+        self.assertEqual(callback["code_verifier"], "expected-verifier")
+        self.assertFalse(callback["autogenerate_code_verifier"])
+
     def test_feedback_uses_retention_and_sample_size(self):
         self.assertIn("Early data", performance_note({"views": 4, "averageViewPercentage": 90}))
         self.assertIn("Strong retention", performance_note({"views": 100, "averageViewPercentage": 85}))

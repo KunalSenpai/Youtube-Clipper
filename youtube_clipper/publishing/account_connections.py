@@ -82,6 +82,18 @@ def validate_dashboard_origin(origin):
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def youtube_oauth_flow(flow_class, *, state=None, code_verifier=None):
+    kwargs = {
+        "scopes": YOUTUBE_CONNECT_SCOPES,
+        "autogenerate_code_verifier": code_verifier is None,
+    }
+    if state is not None:
+        kwargs["state"] = state
+    if code_verifier is not None:
+        kwargs["code_verifier"] = code_verifier
+    return flow_class.from_client_secrets_file(str(WEB_CLIENT_FILE), **kwargs)
+
+
 def begin_youtube_connection(account, origin):
     try:
         from google_auth_oauthlib.flow import Flow
@@ -94,7 +106,7 @@ def begin_youtube_connection(account, origin):
         )
     base = validate_dashboard_origin(origin)
     redirect_uri = f"{base}/oauth/youtube/callback"
-    flow = Flow.from_client_secrets_file(str(WEB_CLIENT_FILE), scopes=YOUTUBE_CONNECT_SCOPES)
+    flow = youtube_oauth_flow(Flow)
     flow.redirect_uri = redirect_uri
     with oauth_transport(redirect_uri):
         authorization_url, state = flow.authorization_url(
@@ -102,14 +114,18 @@ def begin_youtube_connection(account, origin):
             include_granted_scopes="true",
             prompt="consent",
         )
-    return authorization_url, state, redirect_uri
+    if not flow.code_verifier:
+        raise RuntimeError("Google OAuth did not create the required PKCE verifier.")
+    return authorization_url, state, redirect_uri, flow.code_verifier
 
 
-def finish_youtube_connection(account, state, redirect_uri, authorization_response):
+def finish_youtube_connection(
+    account, state, redirect_uri, authorization_response, code_verifier
+):
     from google_auth_oauthlib.flow import Flow
     from googleapiclient.discovery import build
-    flow = Flow.from_client_secrets_file(
-        str(WEB_CLIENT_FILE), scopes=YOUTUBE_CONNECT_SCOPES, state=state
+    flow = youtube_oauth_flow(
+        Flow, state=state, code_verifier=code_verifier
     )
     flow.redirect_uri = redirect_uri
     with oauth_transport(redirect_uri):
