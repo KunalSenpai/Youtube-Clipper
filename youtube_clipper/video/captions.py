@@ -10,6 +10,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from youtube_clipper import config
+from youtube_clipper.video.limits import MAX_SHORT_DURATION_SECONDS
 
 
 def retain_clean_video(raw_video, audio_video, destination):
@@ -18,7 +19,8 @@ def retain_clean_video(raw_video, audio_video, destination):
     result = subprocess.run([
         config.FFMPEG, "-y", "-i", str(raw_video), "-i", str(audio_video),
         "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "libx264", "-preset", "veryfast",
-        "-crf", "19", "-c:a", "copy", "-shortest", "-movflags", "+faststart", str(temporary),
+        "-crf", "19", "-c:a", "copy", "-t", str(MAX_SHORT_DURATION_SECONDS),
+        "-shortest", "-movflags", "+faststart", str(temporary),
     ], capture_output=True, text=True)
     if result.returncode or not temporary.is_file():
         temporary.unlink(missing_ok=True)
@@ -103,7 +105,8 @@ def save_captions(video, cues, expected_revision):
         capture.release()
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("Could not read the editing video's duration.")
-    cues = validate_cues(cues, duration)
+    render_duration = min(duration, MAX_SHORT_DURATION_SECONDS)
+    cues = validate_cues(cues, render_duration)
     subs = pysubs2.load(str(caption), encoding="utf-8")
     old_events = [event for event in subs if not event.is_comment]
     subs.events = []
@@ -125,7 +128,8 @@ def save_captions(video, cues, expected_revision):
         result = subprocess.run([
             config.FFMPEG, "-y", "-i", str(clean), "-vf", f"ass={relative}",
             "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "medium",
-            "-crf", "19", "-c:a", "copy", "-movflags", "+faststart", str(temporary_video),
+            "-crf", "19", "-c:a", "copy", "-t", str(render_duration),
+            "-movflags", "+faststart", str(temporary_video),
         ], cwd=config.PROJECT_ROOT, capture_output=True, text=True)
         if result.returncode or not temporary_video.is_file():
             raise RuntimeError((result.stderr or "Caption rendering failed.")[-1200:])

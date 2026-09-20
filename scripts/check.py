@@ -30,6 +30,7 @@ def main() -> int:
             "tests.test_storage_cleanup",
             "tests.test_captions",
             "tests.test_framing_paths",
+            "tests.test_short_duration",
             "-v",
         ],
     )

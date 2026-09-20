@@ -15,6 +15,10 @@ from faster_whisper import WhisperModel
 
 from youtube_clipper.metadata.source_detector import detect_video_source
 from youtube_clipper import config as bot_config
+from youtube_clipper.video.limits import (
+    MAX_SHORT_DURATION_SECONDS,
+    cap_intervals,
+)
 
 # ============================================================
 # CONFIG
@@ -47,8 +51,9 @@ WHISPER_PROGRESS_SECONDS = float(os.environ.get("YT_AUTO_BOT_WHISPER_PROGRESS_SE
 TARGET_MIN_SHORTS = 5
 TARGET_MAX_SHORTS = 10
 MIN_CLIP_LENGTH = 20
-# Technical upload constraint only; never a preferred selection duration.
-MAX_UPLOAD_SHORT_DURATION = 180
+# Product limit only; never a preferred selection duration. Keeping generated
+# videos at 59 seconds leaves headroom below the requested one-minute ceiling.
+MAX_UPLOAD_SHORT_DURATION = MAX_SHORT_DURATION_SECONDS
 QUALITY_THRESHOLD = 28.0
 NATURAL_PAUSE_SECONDS = 1.20
 STRONG_SCENE_PAUSE_SECONDS = 2.20
@@ -1906,7 +1911,7 @@ def render_short(
     # REMOVE LONG DEAD AIR
     # --------------------------------------------------------
     print("\nOptimizing pacing / removing long pauses...")
-    keep_intervals = build_keep_intervals(start, end)
+    keep_intervals = cap_intervals(build_keep_intervals(start, end))
     timeline, compressed_duration = build_timeline_map(keep_intervals)
     removed = original_duration - compressed_duration
     print(f"Original duration: {original_duration:.2f}s")

@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from youtube_clipper import config as bot_config
+from youtube_clipper.video.limits import MAX_SHORT_DURATION_SECONDS
 
 
 OUTPUT = bot_config.OUTPUT_DIR.resolve()
@@ -189,11 +190,12 @@ def reframe_short(video_path, center_x=0.5, center_y=0.5, zoom=1.0, keyframes=No
         cap.release()
         raise ValueError("The full-frame editing master could not be opened.")
 
+    render_duration = min(duration, MAX_SHORT_DURATION_SECONDS) if duration else MAX_SHORT_DURATION_SECONDS
     framing_keyframes = normalize_keyframes(
         keyframes if keyframes is not None else [{
             "time": 0, "center_x": center_x, "center_y": center_y, "zoom": zoom,
         }],
-        duration=duration,
+        duration=render_duration,
     )
     first = framing_keyframes[0]
     left, top, crop_width, crop_height = crop_geometry(
@@ -216,6 +218,8 @@ def reframe_short(video_path, center_x=0.5, center_y=0.5, zoom=1.0, keyframes=No
             if not ok:
                 break
             current_time = frames / fps
+            if current_time >= render_duration:
+                break
             frame_center_x, frame_center_y, frame_zoom = _interpolate_normalized(
                 framing_keyframes, current_time
             )
@@ -243,6 +247,7 @@ def reframe_short(video_path, center_x=0.5, center_y=0.5, zoom=1.0, keyframes=No
             "-vf", f"ass={caption_filter_path}",
             "-map", "0:v:0",
             "-map", "1:a:0?",
+            "-t", str(render_duration),
             "-c:v", "libx264",
             "-preset", "medium",
             "-crf", "19",

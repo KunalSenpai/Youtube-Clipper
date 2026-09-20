@@ -20,6 +20,7 @@ multi-account publishing in one self-hosted workflow.
 - Downloads supported sources with `yt-dlp` or processes local video files.
 - Transcribes complete sources with Faster-Whisper and reuses cached results.
 - Selects coherent moments instead of cutting at fixed intervals.
+- Keeps every generated or edited Short below one minute (59 seconds maximum).
 - Renders 1080 x 1920 video with synchronized SRT captions.
 - Generates source-aware titles, descriptions, and tags.
 - Keeps metadata isolated between sources and clips.
