@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import uuid
 from copy import deepcopy
@@ -11,6 +12,91 @@ from pathlib import Path
 
 from youtube_clipper import config
 from youtube_clipper.video.limits import MAX_SHORT_DURATION_SECONDS
+
+
+CAPTION_POSITIONS = {"bottom": 2, "middle": 5, "top": 8}
+
+
+def normalize_caption_style(raw):
+    raw = raw if isinstance(raw, dict) else {}
+    font_name = str(raw.get("font_name", "Arial")).strip()
+    if not font_name or len(font_name) > 80 or re.search(r"[{}\\\x00-\x1f]", font_name):
+        raise ValueError("Choose a valid caption font name.")
+
+    def number(name, default, minimum, maximum):
+        try:
+            value = float(raw.get(name, default))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Caption {name.replace('_', ' ')} must be a number.") from exc
+        if not math.isfinite(value) or not minimum <= value <= maximum:
+            raise ValueError(
+                f"Caption {name.replace('_', ' ')} must be between {minimum:g} and {maximum:g}."
+            )
+        return value
+
+    def color(name, default):
+        value = str(raw.get(name, default)).strip().upper()
+        if not re.fullmatch(r"#[0-9A-F]{6}", value):
+            raise ValueError(f"Caption {name.replace('_', ' ')} must be a six-digit color.")
+        return value
+
+    position = str(raw.get("position", "bottom")).lower()
+    if position not in CAPTION_POSITIONS:
+        raise ValueError("Caption position must be top, middle, or bottom.")
+    return {
+        "font_name": font_name,
+        "font_size": round(number("font_size", 38, 20, 120), 1),
+        "text_color": color("text_color", "#FFFFFF"),
+        "outline_color": color("outline_color", "#000000"),
+        "outline": round(number("outline", 3, 0, 10), 1),
+        "shadow": round(number("shadow", 1, 0, 10), 1),
+        "position": position,
+        "margin": round(number("margin", 150, 20, 600)),
+    }
+
+
+def _hex_to_color(value, pysubs2):
+    value = value.lstrip("#")
+    return pysubs2.Color(int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+
+
+def _color_to_hex(value):
+    return f"#{value.r:02X}{value.g:02X}{value.b:02X}"
+
+
+def caption_style(subtitles):
+    style = subtitles.styles.get("Default") or next(iter(subtitles.styles.values()))
+    position = next((name for name, alignment in CAPTION_POSITIONS.items() if alignment == style.alignment), "bottom")
+    return normalize_caption_style({
+        "font_name": style.fontname,
+        "font_size": style.fontsize,
+        "text_color": _color_to_hex(style.primarycolor),
+        "outline_color": _color_to_hex(style.outlinecolor),
+        "outline": style.outline,
+        "shadow": style.shadow,
+        "position": position,
+        "margin": style.marginv,
+    })
+
+
+def apply_caption_style(subtitles, raw_style, pysubs2):
+    values = normalize_caption_style(raw_style)
+    style = subtitles.styles.get("Default") or next(iter(subtitles.styles.values()))
+    style.fontname = values["font_name"]
+    style.fontsize = values["font_size"]
+    style.primarycolor = _hex_to_color(values["text_color"], pysubs2)
+    style.outlinecolor = _hex_to_color(values["outline_color"], pysubs2)
+    style.outline = values["outline"]
+    style.shadow = values["shadow"]
+    style.alignment = CAPTION_POSITIONS[values["position"]]
+    style.marginv = values["margin"]
+    # Generated karaoke captions contain an explicit white reset color. Keep
+    # the active-word highlight but make the resting words follow this style.
+    rgb = values["text_color"].lstrip("#")
+    ass_bgr = rgb[4:6] + rgb[2:4] + rgb[0:2]
+    for event in subtitles.events:
+        event.text = re.sub(r"\\c&HFFFFFF&", rf"\\c&H{ass_bgr}&", event.text, flags=re.I)
+    return values
 
 
 def retain_clean_video(raw_video, audio_video, destination):
@@ -56,7 +142,7 @@ def caption_info(video):
     import pysubs2
     paths = caption_paths(video)
     subs = pysubs2.load(str(paths[1]), encoding="utf-8")
-    return {"revision": revision(paths), "preview_path": str(paths[2]), "cues": [
+    return {"revision": revision(paths), "preview_path": str(paths[2]), "style": caption_style(subs), "cues": [
         {"start": event.start / 1000, "end": event.end / 1000, "text": event.plaintext}
         for event in subs if not event.is_comment
     ]}
@@ -89,7 +175,7 @@ def validate_cues(cues, duration):
     return normalized
 
 
-def save_captions(video, cues, expected_revision):
+def save_captions(video, cues, expected_revision, style=None):
     import pysubs2
     paths = caption_paths(video)
     video, caption, clean = paths
@@ -108,6 +194,7 @@ def save_captions(video, cues, expected_revision):
     render_duration = min(duration, MAX_SHORT_DURATION_SECONDS)
     cues = validate_cues(cues, render_duration)
     subs = pysubs2.load(str(caption), encoding="utf-8")
+    normalized_style = apply_caption_style(subs, style or caption_style(subs), pysubs2)
     old_events = [event for event in subs if not event.is_comment]
     subs.events = []
     for index, cue in enumerate(cues):
@@ -144,4 +231,6 @@ def save_captions(video, cues, expected_revision):
     finally:
         temporary_caption.unlink(missing_ok=True)
         temporary_video.unlink(missing_ok=True)
-    return caption_info(video)
+    result = caption_info(video)
+    result["style"] = normalized_style
+    return result

@@ -31,6 +31,9 @@ def main() -> int:
             "tests.test_captions",
             "tests.test_framing_paths",
             "tests.test_short_duration",
+            "tests.test_trimming",
+            "tests.test_caption_style",
+            "tests.test_accounts_analytics",
             "-v",
         ],
     )
@@ -39,6 +42,7 @@ def main() -> int:
     if node:
         run("Dashboard JavaScript", [node, "--check", "dashboard/app.js"])
         run("Caption editor JavaScript", [node, "--check", "dashboard/captions.js"])
+        run("Timeline editor JavaScript", [node, "--check", "dashboard/trim.js"])
         run("Crop editor transitions", [node, "tests/test_crop_editor.cjs"])
     else:
         print("\nNode.js not found; skipped browser JavaScript checks.")

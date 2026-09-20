@@ -21,6 +21,7 @@
       <button type="button" class="nav" data-section="activity"><span class="nav-icon">04</span><span>Activity</span></button>
       <button type="button" class="nav" data-section="settings"><span class="nav-icon">05</span><span>Accounts</span></button>
       <button type="button" class="nav" data-section="storage"><span class="nav-icon">06</span><span>Storage</span></button>
+      <button type="button" class="nav" data-section="analytics"><span class="nav-icon">07</span><span>Analytics</span></button>
     </nav>
     <div class="side-note"><span class="live-dot"></span><div><b>Private connection</b><span>Tailscale / localhost</span></div></div>
   </aside>
@@ -144,7 +145,18 @@
       <div class="panel">
         <div class="panel-head"><div><span class="section-kicker">Destinations</span><h2>Connected accounts</h2><p>Account credentials stay on the server and are never sent to the browser.</p></div><span class="panel-index">05</span></div>
         <div id="accounts" class="account-list"></div>
+        <div class="info-box"><b>Connect YouTube</b><p>The dashboard connection uses <code>oauth_web_client.json</code>. Register <code>https://your-tailscale-name/oauth/youtube/callback</code> as an authorized redirect URI in Google Cloud.</p></div>
         <div class="info-box"><b>Instagram</b><p>Instagram remains marked Not configured until a real Meta/Instagram publishing integration is added. It is not simulated.</p></div>
+      </div>
+    </section>
+
+    <section id="analytics" class="section">
+      <div class="panel">
+        <div class="panel-head"><div><span class="section-kicker">Performance feedback</span><h2>YouTube analytics</h2><p>Compare views and audience retention, then reuse the editing patterns that hold attention.</p></div><span class="panel-index">07</span></div>
+        <div class="controls"><label>Account<select id="analyticsAccount"></select></label><label>Period<select id="analyticsDays"><option value="28">Last 28 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></label><button type="button" class="refresh" id="loadAnalytics">Load analytics</button></div>
+        <div id="analyticsStatus" class="hint">Connect an account with analytics access, then load its report.</div>
+        <div id="analyticsSummary" class="stats analytics-summary"></div>
+        <div id="analyticsRows" class="table analytics-table"></div>
       </div>
     </section>
   </main>
@@ -251,19 +263,41 @@
     </div>
   </div>
 </dialog>
+<dialog id="trimDialog" class="preview-dialog" aria-labelledby="trimTitle">
+  <div class="preview-shell">
+    <div class="review-header">
+      <div><h2 id="trimTitle">Trim Short</h2><p>Choose the exact beginning and ending of the finished clip.</p></div>
+      <button type="button" class="icon-button" id="closeTrimBtn">Close</button>
+    </div>
+    <div id="trimStatus" class="review-state show" role="status" aria-live="polite"></div>
+    <div class="trim-workspace" id="trimWorkspace">
+      <video id="trimVideo" controls playsinline preload="metadata"></video>
+      <div class="trim-controls">
+        <div class="trim-readout"><span>New duration</span><strong id="trimDuration">—</strong></div>
+        <label>Start <output id="trimStartValue">00:00.00</output><input id="trimStart" type="range" min="0" max="1" step="0.05" value="0"></label>
+        <label>End <output id="trimEndValue">00:00.00</output><input id="trimEnd" type="range" min="0" max="1" step="0.05" value="1"></label>
+        <div class="trim-actions"><button type="button" class="frame-button" id="setTrimStart">Set start to playhead</button><button type="button" class="frame-button" id="setTrimEnd">Set end to playhead</button></div>
+        <button type="button" class="text-btn" id="previewTrim">Preview selected range</button>
+        <p class="hint">Saving trims the Short and its editing copies. Regenerate the source to recover removed sections.</p>
+      </div>
+    </div>
+    <div class="review-footer"><p>The saved clip remains editable and must stay below 59 seconds.</p><button type="button" class="primary" id="saveTrimBtn">Save trim</button></div>
+  </div>
+</dialog>
 <dialog id="captionDialog" class="review-dialog" aria-labelledby="captionTitle">
   <div class="review-shell">
     <div class="review-header"><div><h2 id="captionTitle">Edit captions</h2><p>Correct the words and timing, then save the updated Short.</p></div><button type="button" class="icon-button" id="closeCaptions">Close</button></div>
     <div id="captionStatus" class="review-state show" role="status" aria-live="polite"></div>
     <div class="caption-workspace" id="captionWorkspace">
-      <section class="caption-preview"><div class="caption-player"><video id="captionVideo" controls playsinline preload="metadata"></video><div id="captionOverlay" aria-hidden="true"></div></div><p class="hint">Text preview uses the clean video. Saving applies the existing caption style. Edited lines use steady text instead of word highlighting.</p></section>
+      <section class="caption-preview"><div class="caption-player"><video id="captionVideo" controls playsinline preload="metadata"></video><div id="captionOverlay" aria-hidden="true"></div></div><p class="hint">Text preview uses the clean video. Edited lines use steady text instead of word highlighting.</p><div class="caption-style" id="captionStyle"><b>Caption style</b><label>Font<input data-style="font_name" type="text" maxlength="80" value="Arial"></label><div class="caption-style-grid"><label>Size<input data-style="font_size" type="number" min="20" max="120" step="1"></label><label>Position<select data-style="position"><option value="bottom">Bottom</option><option value="middle">Middle</option><option value="top">Top</option></select></label><label>Text color<input data-style="text_color" type="color"></label><label>Outline color<input data-style="outline_color" type="color"></label><label>Outline<input data-style="outline" type="number" min="0" max="10" step="0.5"></label><label>Shadow<input data-style="shadow" type="number" min="0" max="10" step="0.5"></label><label>Safe margin<input data-style="margin" type="number" min="20" max="600" step="10"></label></div></div></section>
       <section class="caption-edit"><div class="caption-list" id="captionRows"></div><button type="button" class="text-btn" id="addCaption">Add line at playhead</button></section>
     </div>
     <div class="review-footer"><p>Updates this local Short and future subtitle uploads. Videos already on YouTube are unchanged.</p><button type="button" class="primary" id="saveCaptions" disabled>Save captions</button></div>
   </div>
 </dialog>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script src="/app.js?v=9"></script>
-<script src="/captions.js?v=1"></script>
+<script src="/app.js?v=10"></script>
+<script src="/trim.js?v=1"></script>
+<script src="/captions.js?v=2"></script>
 </body>
 </html>

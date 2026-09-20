@@ -33,6 +33,14 @@ use a separate token file and upload log:
 
 Token files and upload logs remain local and are excluded from Git.
 
+The **Accounts** page can connect or reconnect YouTube without running the
+uploader. Create a Google OAuth **Web application**, enable the YouTube Data
+API and YouTube Analytics API, and save its downloaded credentials as
+`oauth_web_client.json`. Add the exact callback shown by the dashboard to the
+client's authorized redirect URIs. Remote connections require HTTPS; the
+Tailscale Serve address satisfies this requirement. Credentials remain on the
+server, and disconnecting does not remove upload history.
+
 ## Generation
 
 The Generate view launches `main.py` for a supported YouTube URL. Output is
@@ -50,15 +58,28 @@ are available in the Activity view.
    remove a movement point (the Start point is retained). Choose **Save crop**
    to render the result. The centered manual preview replaces automatic face
    tracking only when saved. Expand **Compare with saved Short** to compare.
-2. Select one or more rendered `short_XX.mp4` files.
-3. Choose **Prepare upload**.
-4. Review or edit the title, description, tags, and visibility.
-5. Confirm the validation result and planned publishing action.
-6. Choose **Approve and upload**.
+2. Choose **Trim** to set a new start and end. Saving shortens the final video,
+   full-frame master, clean editing copy, captions, framing keyframes, and
+   timeline manifest together. Regenerate the Short to recover removed media.
+3. Choose **Captions** to edit text and timing or change font, size, colors,
+   outline, shadow, position, and safe-area margin.
+4. Select one or more rendered `short_XX.mp4` files.
+5. Choose **Prepare upload**.
+6. Review or edit the title, description, tags, and visibility.
+7. Confirm the validation result and planned publishing action.
+8. Choose **Approve and upload**.
 
 The preparation step runs without OAuth or YouTube API calls. Approval stores
 the exact reviewed request, and the uploader stops if its final request differs
 from the approved copy.
+
+## Analytics
+
+The **Analytics** page reads completed YouTube reports for the selected period.
+It shows video-level views, watch time, likes, comments, average viewed
+percentage, and a small editing recommendation based on retention. Existing
+upload-only tokens must be reconnected once to grant the two additional
+read-only permissions. The app does not request monetary analytics.
 
 ## Remote access
 

@@ -21,10 +21,13 @@ multi-account publishing in one self-hosted workflow.
 - Transcribes complete sources with Faster-Whisper and reuses cached results.
 - Selects coherent moments instead of cutting at fixed intervals.
 - Keeps every generated or edited Short below one minute (59 seconds maximum).
+- Trims clips while keeping captions, manifests, and editing copies aligned.
+- Edits caption typography, colors, outline, shadow, position, and safe-area margin.
 - Renders 1080 x 1920 video with synchronized SRT captions.
 - Generates source-aware titles, descriptions, and tags.
 - Keeps metadata isolated between sources and clips.
-- Supports multiple YouTube accounts with separate tokens and upload logs.
+- Connects YouTube accounts with separate tokens and upload logs.
+- Summarizes views, watch time, and audience retention with editing feedback.
 - Prevents duplicate uploads and supports private, public, and scheduled modes.
 - Provides a review-and-approve step before any dashboard upload.
 - Offers a true dry run that does not open OAuth or call the YouTube API.
@@ -116,6 +119,19 @@ client_secret.json
 
 OAuth secrets, tokens, generated media, caches, and logs are excluded by
 `.gitignore`.
+
+Dashboard account connection and analytics require a separate Google OAuth
+**Web application** credential saved as `oauth_web_client.json`. Enable the
+YouTube Data API and YouTube Analytics API, then register the exact callback
+shown on the Accounts page, for example:
+
+```text
+https://youtube-clipper.example.ts.net/oauth/youtube/callback
+```
+
+The existing `client_secret.json` desktop credential can continue serving
+command-line authorization. Existing upload tokens remain usable, but must be
+reconnected once before the Analytics page can read retention data.
 
 ### 4. Start the dashboard
 
@@ -293,7 +309,8 @@ New generations and crop saves retain a caption-free `.clean.mp4` editing copy
 with the current crop and audio. Older Shorts need their crop saved again or must
 be regenerated before caption editing is available. Edited lines use steady text;
 unchanged lines retain their original highlighting. The preview approximates text
-placement; the render retains the existing ASS caption style.
+placement. Font, size, colors, outline, shadow, position, and safe-area margin
+can be changed before rendering.
 
 Caption saves reject overlapping/out-of-range times, stale edits, and active
 dashboard jobs. Stop separate command-line processing before editing. Storage

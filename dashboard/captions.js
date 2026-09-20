@@ -1,12 +1,32 @@
 (() => {
   const el = id => document.getElementById(id);
-  let path = null, revision = null, cues = [], dirty = false, saving = false;
+  let path = null, revision = null, cues = [], style = {}, dirty = false, saving = false;
   let session = 0;
   const status = text => { el('captionStatus').textContent = text; };
   function preview() {
     const time = el('captionVideo').currentTime;
     const cue = cues.find(cue => time >= Number(cue.start) && time < Number(cue.end));
     el('captionOverlay').textContent = cue?.text || '';
+  }
+  function previewStyle() {
+    const overlay = el('captionOverlay');
+    overlay.style.fontFamily = style.font_name || 'Arial';
+    overlay.style.fontSize = `${Math.max(12, Number(style.font_size || 38) * 0.47)}px`;
+    overlay.style.color = style.text_color || '#FFFFFF';
+    const outline = Math.max(0, Number(style.outline || 0)) * 0.65;
+    const shadow = Math.max(0, Number(style.shadow || 0)) * 0.8;
+    const color = style.outline_color || '#000000';
+    overlay.style.webkitTextStroke = `${outline}px ${color}`;
+    overlay.style.textShadow = `${shadow}px ${shadow}px ${Math.max(1, shadow)}px ${color}`;
+    overlay.style.top = style.position === 'top' ? '10%' : (style.position === 'middle' ? '45%' : 'auto');
+    overlay.style.bottom = style.position === 'bottom' ? `${Math.max(6, Math.min(40, Number(style.margin || 150) / 9.6))}%` : 'auto';
+  }
+  function styleFields() {
+    el('captionStyle').querySelectorAll('[data-style]').forEach(input => {
+      const value = style[input.dataset.style];
+      if (value !== undefined) input.value = value;
+    });
+    previewStyle();
   }
   function rows() {
     el('captionRows').innerHTML = cues.map((cue, i) => `<article class="caption-row" data-cue="${i}">
@@ -25,7 +45,7 @@
   async function open(videoPath) {
     if (saving) return;
     const request = ++session;
-    path = videoPath; dirty = false; cues = []; revision = null;
+    path = videoPath; dirty = false; cues = []; style = {}; revision = null;
     el('captionVideo').removeAttribute('src'); el('captionVideo').load();
     el('captionRows').replaceChildren(); el('captionOverlay').textContent = '';
     el('captionWorkspace').inert = true; el('saveCaptions').disabled = true;
@@ -35,10 +55,10 @@
       const data = await response.json();
       if (request !== session) return;
       if (!response.ok) throw new Error(data.error || 'Could not load captions.');
-      revision = data.revision; cues = data.cues;
+      revision = data.revision; cues = data.cues; style = data.style || {};
       el('captionVideo').src = '/media?path=' + encodeURIComponent(data.preview_path) + '&_=' + Date.now();
       el('captionWorkspace').inert = false;
-      rows(); status('Select Play line to check a caption, or edit its text and times below.');
+      styleFields(); rows(); status('Edit the caption text, timing, and visual style below.');
     } catch (error) { if (request === session) status(error.message); }
   }
   function close() {
@@ -61,6 +81,13 @@
     const field = event.target.dataset.field;
     cues[Number(row.dataset.cue)][field] = field === 'text' ? event.target.value : (event.target.value === '' ? null : Number(event.target.value));
     changed();
+  });
+  el('captionStyle').addEventListener('input', event => {
+    const field = event.target.dataset.style;
+    if (!field) return;
+    style[field] = ['font_size', 'outline', 'shadow', 'margin'].includes(field)
+      ? Number(event.target.value) : event.target.value;
+    previewStyle(); changed();
   });
   el('captionRows').addEventListener('click', event => {
     const seek = event.target.closest('[data-seek]');
@@ -91,9 +118,9 @@
     saving = true; el('captionVideo').pause(); el('captionWorkspace').inert = true;
     el('saveCaptions').disabled = true; status('Rendering captions. This can take a few minutes…');
     try {
-      const data = await postJson('/api/captions', {video_path: path, revision, cues});
-      cues = data.cues; revision = data.revision; dirty = false;
-      rows(); status('Saved. The local Short and future subtitle uploads now use these captions.');
+      const data = await postJson('/api/captions', {video_path: path, revision, cues, style});
+      cues = data.cues; style = data.style || style; revision = data.revision; dirty = false;
+      styleFields(); rows(); status('Saved. The local Short and future subtitle uploads now use these captions and style.');
       await loadState();
     } catch (error) { status(error.message); }
     finally { saving = false; el('captionWorkspace').inert = false; el('saveCaptions').disabled = !dirty; }

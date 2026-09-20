@@ -25,6 +25,7 @@ ffmpeg/
 *token*.json
 *credentials*.json
 client_secret*.json
+oauth_web_client.json
 youtube_token.json
 *.cookies
 .env

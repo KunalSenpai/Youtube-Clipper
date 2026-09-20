@@ -112,6 +112,7 @@ function renderAccountSelects() {
   filter.innerHTML = `<option value="__all__">All accounts + legacy</option>` +
     yt.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');
   if ([...filter.options].some(o => o.value === old)) filter.value = old;
+  if ($('analyticsAccount')) setOptions($('analyticsAccount'), yt, 'No YouTube account configured');
 }
 
 function renderUploadAccounts() {
@@ -136,7 +137,7 @@ function renderVideos() {
         <div class="video-title-row"><label class="check-wrap"><input type="checkbox" class="video-check" data-path="${esc(v.path)}" ${checked ? 'checked' : ''}><span></span></label><b title="${esc(v.name)}">${esc(v.name)}</b></div>
         <small>${esc(v.folder)} · ${v.size_mb} MB</small>
         <div class="badge-row"><span class="badge ${uploaded ? 'done' : ''}">${uploaded ? 'Uploaded' : 'Pending'}</span>${v.legacy ? '<span class="badge legacy">Legacy</span>' : ''}</div>
-        <div class="video-card-actions"><button type="button" class="frame-button" data-preview-path="${esc(v.path)}">Preview</button><button type="button" class="frame-button" data-caption-path="${esc(v.path)}" ${v.caption_editable ? '' : 'disabled'} title="${v.caption_editable ? 'Edit caption text and timing' : 'Save the crop again or regenerate to enable captions'}">Captions</button><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust frame' : 'Regenerate to edit'}</button>${String(v.framing_mode || '').startsWith('manual') ? `<span class="badge done">${v.framing_mode === 'manual_keyframes' ? 'Keyframed' : 'Manual frame'}</span>` : ''}</div>
+        <div class="video-card-actions"><button type="button" class="frame-button" data-preview-path="${esc(v.path)}">Preview</button><button type="button" class="frame-button" data-trim-path="${esc(v.path)}" ${v.trim_editable ? '' : 'disabled'}>Trim</button><button type="button" class="frame-button" data-caption-path="${esc(v.path)}" ${v.caption_editable ? '' : 'disabled'} title="${v.caption_editable ? 'Edit caption text and timing' : 'Save the crop again or regenerate to enable captions'}">Captions</button><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust frame' : 'Regenerate to edit'}</button>${String(v.framing_mode || '').startsWith('manual') ? `<span class="badge done">${v.framing_mode === 'manual_keyframes' ? 'Keyframed' : 'Manual frame'}</span>` : ''}</div>
       </div>
     </article>`;
   }).join('') || emptyState('01', 'No Shorts in this queue', 'Generate a source video to create your first reviewable clips.');
@@ -174,7 +175,7 @@ function renderTable() {
       <div>${esc(owner)}</div>
       <div><span class="badge ${uploaded ? 'done' : ''}">${uploaded ? 'Uploaded' : 'Pending'}</span><span>${esc(v.modified)}</span></div>
       <div>${v.size_mb} MB</div>
-      <div class="row-actions"><button type="button" class="frame-button" data-preview-path="${esc(v.path)}">Preview</button><button type="button" class="frame-button" data-caption-path="${esc(v.path)}" ${v.caption_editable ? '' : 'disabled'} title="${v.caption_editable ? 'Edit caption text and timing' : 'Save the crop again or regenerate to enable captions'}">Captions</button><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust' : 'No master'}</button></div>
+      <div class="row-actions"><button type="button" class="frame-button" data-preview-path="${esc(v.path)}">Preview</button><button type="button" class="frame-button" data-trim-path="${esc(v.path)}" ${v.trim_editable ? '' : 'disabled'}>Trim</button><button type="button" class="frame-button" data-caption-path="${esc(v.path)}" ${v.caption_editable ? '' : 'disabled'} title="${v.caption_editable ? 'Edit caption text and timing' : 'Save the crop again or regenerate to enable captions'}">Captions</button><button type="button" class="frame-button" data-frame-path="${esc(v.path)}" ${v.frame_editable ? '' : 'disabled'}>${v.frame_editable ? 'Adjust' : 'No master'}</button></div>
     </div>`;
   }).join('') || emptyState('03', 'No matching Shorts', 'Try another search, account, or upload status filter.');
 }
@@ -334,10 +335,49 @@ function elapsedForJob(job) {
 
 function renderAccountsPage() {
   $('accounts').innerHTML = state.accounts.map(a => {
-    const configured = a.status !== 'not_configured' && (a.platform !== 'youtube' || !!a.token_file);
+    const configured = a.platform === 'youtube' ? !!a.connected : a.status !== 'not_configured';
     const initial = String(a.platform || '?').slice(0, 1).toUpperCase();
-    return `<article class="account"><span class="account-mark">${esc(initial)}</span><div><b>${esc(a.name)}</b><span>${esc(a.platform)} destination</span></div><strong class="account-status ${configured ? 'connected' : ''}"><i></i>${configured ? 'Connected' : 'Not configured'}</strong></article>`;
+    const analytics = a.platform === 'youtube' && configured ? `<span class="badge ${a.analytics_ready ? 'done' : ''}">${a.analytics_ready ? 'Analytics ready' : 'Reconnect for analytics'}</span>` : '';
+    const action = a.platform === 'youtube' ? `<div class="account-actions"><button type="button" class="frame-button" data-account-action="connect" data-account-id="${esc(a.id)}">${configured ? 'Reconnect' : 'Connect account'}</button>${configured ? `<button type="button" class="text-btn" data-account-action="disconnect" data-account-id="${esc(a.id)}">Disconnect</button>` : ''}</div>` : '';
+    return `<article class="account"><span class="account-mark">${esc(initial)}</span><div><b>${esc(a.name)}</b><span>${esc(a.platform)} destination</span>${analytics}</div><strong class="account-status ${configured ? 'connected' : ''}"><i></i>${configured ? 'Connected' : 'Not configured'}</strong>${action}</article>`;
   }).join('') || emptyState('05', 'No accounts configured', 'Add an account definition on the server to enable publishing.');
+}
+
+async function accountAction(button) {
+  const accountId = button.dataset.accountId;
+  const action = button.dataset.accountAction;
+  if (action === 'disconnect') {
+    if (!confirm('Disconnect this YouTube account? Upload history will be kept.')) return;
+    await postJson('/api/accounts/disconnect', {account_id: accountId});
+    await loadState(); toast('YouTube account disconnected.'); return;
+  }
+  const popup = window.open('', 'youtube-oauth', 'width=720,height=760');
+  try {
+    const data = await postJson('/api/accounts/connect', {account_id: accountId});
+    if (popup) popup.location = data.authorization_url;
+    else window.location.href = data.authorization_url;
+  } catch (error) {
+    popup?.close(); toast(error.message);
+  }
+}
+
+async function loadAnalytics() {
+  const account = $('analyticsAccount').value;
+  if (!account) return;
+  setBusy($('loadAnalytics'), true, 'Loading…');
+  $('analyticsStatus').textContent = 'Requesting the latest completed YouTube Analytics report…';
+  try {
+    const response = await fetch(`/api/analytics?account_id=${encodeURIComponent(account)}&days=${Number($('analyticsDays').value)}`, {cache: 'no-store'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Analytics request failed.');
+    const summary = data.summary || {};
+    $('analyticsSummary').innerHTML = `<article class="stat"><span>Views</span><strong>${Number(summary.views || 0).toLocaleString()}</strong></article><article class="stat"><span>Watch time</span><strong>${Number(summary.watch_minutes || 0).toLocaleString()}m</strong></article><article class="stat"><span>Likes</span><strong>${Number(summary.likes || 0).toLocaleString()}</strong></article><article class="stat"><span>Comments</span><strong>${Number(summary.comments || 0).toLocaleString()}</strong></article>`;
+    $('analyticsRows').innerHTML = (data.videos || []).map(row => `<article class="row analytics-row"><div><b>${esc(row.title || row.video)}</b><span>${esc(row.note)} · ${esc(row.video)}</span></div><div><b>${Number(row.views || 0).toLocaleString()}</b><span>views</span></div><div><b>${Number(row.averageViewPercentage || 0).toFixed(1)}%</b><span>average viewed</span></div><div><b>${Number(row.likes || 0).toLocaleString()}</b><span>likes</span></div></article>`).join('') || emptyState('07', 'No analytics yet', 'YouTube may need more time and views before video-level rows appear.');
+    $('analyticsStatus').textContent = `${data.start_date} through ${data.end_date}. YouTube omits the newest incomplete reporting days.`;
+  } catch (error) {
+    $('analyticsStatus').textContent = error.message;
+    $('analyticsSummary').replaceChildren(); $('analyticsRows').replaceChildren();
+  } finally { setBusy($('loadAnalytics'), false, 'Load analytics'); }
 }
 
 function togglePath(path) {
@@ -905,6 +945,7 @@ function nav(section) {
   });
   const pages = {
     storage: ['Storage', 'Inspect disk usage and clean up old editing files.'],
+    analytics: ['Analytics', 'Learn which Shorts and editing patterns retain viewers.'],
     settings: ['Accounts', 'Manage publishing destinations and connection status.'],
     generate: ['Generate', 'Create a new batch of Shorts from a YouTube source.'],
     activity: ['Activity', 'Follow live processing output and inspect earlier jobs.'],
@@ -928,6 +969,14 @@ function JSONSafe(v) { try { return JSON.parse(v); } catch { return null; } }
 JSON.parseSafe = JSONSafe;
 
 function bindEvents() {
+  $('accounts').addEventListener('click', event => {
+    const button = event.target.closest('[data-account-action]');
+    if (button) accountAction(button).catch(error => toast(error.message));
+  });
+  $('loadAnalytics').addEventListener('click', loadAnalytics);
+  window.addEventListener('message', event => {
+    if (event.origin === location.origin && event.data === 'youtube-oauth-complete') loadState();
+  });
   $('storageScan').addEventListener('click', scanStorage);
   $('storageAge').addEventListener('change', scanStorage);
   $('storageFiles').addEventListener('change', updateStorageSelection);
@@ -1103,6 +1152,12 @@ function bindEvents() {
   $('generateFullBtn').addEventListener('click', () => generateFrom('generateUrlFull', 'generateAccountFull', $('generateFullBtn'), 'generateStatus'));
   $('videoGrid').addEventListener('click', e => {
     if (e.target.closest('[data-caption-path]')) return;
+    const trimButton = e.target.closest('[data-trim-path]');
+    if (trimButton && !trimButton.disabled) {
+      e.stopPropagation();
+      window.openTrimEditor?.(trimButton.dataset.trimPath);
+      return;
+    }
     const previewButton = e.target.closest('[data-preview-path]');
     if (previewButton) {
       e.stopPropagation();
@@ -1127,6 +1182,11 @@ function bindEvents() {
     togglePath(path);
   });
   $('videoTable').addEventListener('click', e => {
+    const trimButton = e.target.closest('[data-trim-path]');
+    if (trimButton && !trimButton.disabled) {
+      window.openTrimEditor?.(trimButton.dataset.trimPath);
+      return;
+    }
     const previewButton = e.target.closest('[data-preview-path]');
     if (previewButton) {
       openPreview(previewButton.dataset.previewPath);

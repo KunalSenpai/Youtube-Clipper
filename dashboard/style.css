@@ -482,4 +482,31 @@ code { padding: 2px 5px; border-radius: 4px; background: #202621; color: #c7cfc9
 .caption-row input, .caption-row textarea { width: 100%; min-width: 0; }
 .caption-row textarea { resize: vertical; }
 .caption-edit { min-width: 0; }
+.caption-style { display: grid; gap: 10px; margin-top: 16px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #101512; }
+.caption-style > b { font-size: 11px; }
+.caption-style label { display: grid; gap: 5px; color: var(--muted); font-size: 9px; }
+.caption-style input, .caption-style select { width: 100%; min-width: 0; }
+.caption-style input[type="color"] { height: 36px; padding: 3px; }
+.caption-style-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 @media (max-width: 620px) { .caption-workspace { grid-template-columns: 1fr; } .caption-preview { position: static; width: 180px; justify-self: center; } }
+
+.trim-workspace { display: grid; grid-template-columns: minmax(260px, 1fr) 280px; gap: 22px; padding: 20px; overflow: auto; }
+.trim-workspace video { display: block; width: 100%; max-height: 62dvh; border-radius: var(--radius-sm); background: #050705; }
+.trim-controls { display: flex; flex-direction: column; gap: 16px; }
+.trim-controls label { display: grid; grid-template-columns: 1fr auto; gap: 8px; color: var(--muted-strong); font-size: 11px; }
+.trim-controls label input { grid-column: 1 / -1; width: 100%; min-width: 0; padding: 0; accent-color: var(--accent); }
+.trim-controls output { color: var(--accent); font: 600 10px/1 ui-monospace, "Cascadia Code", monospace; }
+.trim-readout { padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #111613; }
+.trim-readout span, .trim-readout strong { display: block; }
+.trim-readout span { margin-bottom: 7px; color: var(--muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.trim-readout strong { font-size: 20px; }
+.trim-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+@media (max-width: 620px) { .trim-workspace { grid-template-columns: 1fr; } }
+
+.account { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.account .badge { display: inline-block; margin-top: 7px; }
+.account-actions { display: flex; gap: 6px; }
+.analytics-summary { margin: 18px 0; }
+.analytics-row { grid-template-columns: minmax(260px, 2fr) repeat(3, minmax(90px, .6fr)); }
+.analytics-row > div span { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; }
+@media (max-width: 820px) { .analytics-row { grid-template-columns: 1fr 1fr; } .account { grid-template-columns: auto 1fr; } .account-actions { grid-column: 1 / -1; } }

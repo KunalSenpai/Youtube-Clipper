@@ -25,6 +25,14 @@ from youtube_clipper.video.framing import reframe_short as apply_manual_framing
 from youtube_clipper.publishing.storage import upload_log_lock, atomic_save_json
 from youtube_clipper.backend.storage import inventory as storage_inventory, cleanup as cleanup_storage
 from youtube_clipper.video.captions import caption_info, save_captions
+from youtube_clipper.video.trimming import trim_info, trim_short
+from youtube_clipper.publishing.account_connections import (
+    begin_youtube_connection,
+    connection_status,
+    disconnect_account,
+    finish_youtube_connection,
+)
+from youtube_clipper.publishing.analytics import youtube_analytics
 
 ROOT = bot_config.PROJECT_ROOT
 INPUT = bot_config.INPUT_DIR
@@ -55,6 +63,7 @@ MUTATION_LOCK = threading.RLock()
 ACTIVE_PROCESSES: dict[str, subprocess.Popen] = {}
 CANCELLED_JOBS: set[str] = set()
 ACTIVE_REFRAMES: set[str] = set()
+OAUTH_FLOWS: dict[str, dict] = {}
 
 
 def utc_now():
@@ -155,6 +164,7 @@ def all_videos(account_id=None):
             "content_account_id": owner,
             "legacy": owner is None,
             "frame_editable": bool(source_master),
+            "trim_editable": bool(manifest and source_master),
             "caption_editable": path.with_suffix(".clean.mp4").is_file(),
             "framing_mode": (manifest.get("framing") or {}).get("mode") if manifest else None,
         })
@@ -639,6 +649,25 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
 
+        if parsed.path == "/oauth/youtube/callback":
+            query = parse_qs(parsed.query)
+            state = query.get("state", [""])[0]
+            with PROCESS_LOCK:
+                pending = OAUTH_FLOWS.pop(state, None)
+            if not pending or query.get("error"):
+                return self.serve_oauth_result(False, query.get("error", ["Invalid or expired OAuth state."])[0])
+            account = account_by_id(pending["account_id"])
+            if not account:
+                return self.serve_oauth_result(False, "The account configuration no longer exists.")
+            try:
+                response_url = f"{pending['redirect_uri']}?{parsed.query}"
+                channel = finish_youtube_connection(
+                    account, state, pending["redirect_uri"], response_url
+                )
+                return self.serve_oauth_result(True, f"Connected to {channel}.")
+            except Exception as exc:
+                return self.serve_oauth_result(False, str(exc))
+
         if parsed.path == "/api/storage":
             try:
                 days = int(parse_qs(parsed.query).get("days", ["30"])[0])
@@ -647,11 +676,12 @@ class Handler(BaseHTTPRequestHandler):
                 return json_response(self, {"error": str(exc)}, 400)
 
         if parsed.path == "/api/state":
-            accounts = load_accounts().get("accounts", [])
+            raw_accounts = load_accounts().get("accounts", [])
+            accounts = [connection_status(account) for account in raw_accounts]
             videos = all_videos()
             for video in videos:
                 video["uploaded_accounts"] = [
-                    account["id"] for account in accounts
+                    account["id"] for account in raw_accounts
                     if video["path"] in load_log(account)
                 ]
             jobs = job_rows()
@@ -681,6 +711,24 @@ class Handler(BaseHTTPRequestHandler):
             json_response(self, {"job": row, "log": log})
             return
 
+        if parsed.path == "/api/analytics":
+            account = account_by_id(parse_qs(parsed.query).get("account_id", [""])[0])
+            if not account or account.get("platform") != "youtube":
+                return json_response(self, {"error": "Choose a valid YouTube account."}, 400)
+            try:
+                days = int(parse_qs(parsed.query).get("days", ["28"])[0])
+                report = youtube_analytics(account, days)
+                titles = {
+                    str(item.get("video_id")): str(item.get("title") or "")
+                    for item in load_log(account).values()
+                    if isinstance(item, dict) and item.get("video_id")
+                }
+                for row in report.get("videos", []):
+                    row["title"] = titles.get(str(row.get("video")), "")
+                return json_response(self, report)
+            except Exception as exc:
+                return json_response(self, {"error": str(exc)}, 400)
+
         if parsed.path == "/api/review":
             job_id = parse_qs(parsed.query).get("id", [""])[0]
             row, error = review_job(job_id)
@@ -704,6 +752,15 @@ class Handler(BaseHTTPRequestHandler):
                 return json_response(self, {"ok": True, **framing_info(raw)})
             except ValueError as exc:
                 return json_response(self, {"error": str(exc)}, 404)
+
+        if parsed.path == "/api/trim-info":
+            video = safe_output_file(parse_qs(parsed.query).get("path", [""])[0])
+            try:
+                if not video:
+                    raise ValueError("The selected Short is unavailable.")
+                return json_response(self, {"ok": True, **trim_info(video)})
+            except (ValueError, OSError, KeyError, ImportError) as exc:
+                return json_response(self, {"error": str(exc)}, 400)
 
         if parsed.path == "/api/captions":
             video = safe_output_file(parse_qs(parsed.query).get("path", [""])[0])
@@ -730,6 +787,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.serve(APPJS, "application/javascript; charset=utf-8")
         if parsed.path == "/captions.js":
             return self.serve(DASHBOARD_DIR / "captions.js", "application/javascript; charset=utf-8")
+        if parsed.path == "/trim.js":
+            return self.serve(DASHBOARD_DIR / "trim.js", "application/javascript; charset=utf-8")
         self.send_error(404)
 
     def serve(self, path, content_type):
@@ -746,6 +805,22 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             pass
+
+    def serve_oauth_result(self, success, message):
+        import html
+        title = "YouTube connected" if success else "Connection failed"
+        data = ("<!doctype html><meta charset='utf-8'><title>" + title + "</title>"
+                "<style>body{font:16px system-ui;background:#0d110f;color:#e9eee9;display:grid;"
+                "place-items:center;min-height:100vh;margin:0}main{max-width:520px;padding:32px;"
+                "border:1px solid #364039;border-radius:16px;background:#111613}p{color:#aab4ad}</style>"
+                f"<main><h1>{html.escape(title)}</h1><p>{html.escape(message)}</p>"
+                "<p>You can close this window and return to the dashboard.</p>"
+                "<script>if(window.opener){window.opener.postMessage('youtube-oauth-complete',location.origin)}</script></main>").encode()
+        self.send_response(200 if success else 400)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def serve_media(self, path):
         """Stream MP4 data with byte ranges so large editing masters seek safely."""
@@ -818,6 +893,8 @@ class Handler(BaseHTTPRequestHandler):
             "/api/generate", "/api/stop", "/api/delete", "/api/reframe",
             "/api/storage/cleanup",
             "/api/captions",
+            "/api/trim",
+            "/api/accounts/connect", "/api/accounts/disconnect",
         }:
             self.send_error(404)
             return
@@ -825,6 +902,43 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             body = json.loads(self.rfile.read(length).decode("utf-8"))
+            if parsed.path in {"/api/accounts/connect", "/api/accounts/disconnect"}:
+                account = account_by_id(body.get("account_id"))
+                if not account or account.get("platform") != "youtube":
+                    raise ValueError("Choose a valid YouTube account.")
+                if parsed.path == "/api/accounts/disconnect":
+                    disconnect_account(account)
+                    return json_response(self, {"ok": True})
+                authorization_url, state, redirect_uri = begin_youtube_connection(
+                    account, origin or f"http://{self.headers.get('Host', '')}"
+                )
+                with PROCESS_LOCK:
+                    OAUTH_FLOWS[state] = {
+                        "account_id": account["id"],
+                        "redirect_uri": redirect_uri,
+                    }
+                return json_response(self, {"ok": True, "authorization_url": authorization_url})
+            if parsed.path == "/api/trim":
+                video = safe_output_file(body.get("video_path", ""))
+                if not video:
+                    raise ValueError("The selected Short is unavailable.")
+                resolved_video = str(video.resolve())
+                with db() as conn:
+                    busy = conn.execute(
+                        "SELECT 1 FROM jobs WHERE status IN ('queued','running') LIMIT 1"
+                    ).fetchone()
+                with PROCESS_LOCK:
+                    busy = busy or bool(ACTIVE_PROCESSES) or bool(ACTIVE_REFRAMES)
+                    if not busy:
+                        ACTIVE_REFRAMES.add(resolved_video)
+                if busy:
+                    return json_response(self, {"error": "Wait for active jobs or edits to finish before trimming."}, 409)
+                try:
+                    result = trim_short(resolved_video, body.get("start"), body.get("end"))
+                finally:
+                    with PROCESS_LOCK:
+                        ACTIVE_REFRAMES.discard(resolved_video)
+                return json_response(self, {"ok": True, **result})
             if parsed.path == "/api/captions":
                 video = safe_output_file(body.get("video_path", ""))
                 if not video:
@@ -833,7 +947,9 @@ class Handler(BaseHTTPRequestHandler):
                     busy = conn.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running') LIMIT 1").fetchone()
                 if busy or ACTIVE_PROCESSES or ACTIVE_REFRAMES:
                     return json_response(self, {"error": "Wait for active jobs to finish before editing captions."}, 409)
-                return json_response(self, {"ok": True, **save_captions(video, body.get("cues"), body.get("revision"))})
+                return json_response(self, {"ok": True, **save_captions(
+                    video, body.get("cues"), body.get("revision"), body.get("style")
+                )})
             if parsed.path == "/api/storage/cleanup":
                 with db() as conn:
                     busy = conn.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running') LIMIT 1").fetchone()
